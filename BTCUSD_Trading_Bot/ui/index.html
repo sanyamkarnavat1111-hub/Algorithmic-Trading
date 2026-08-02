@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Crypto Trading Bot — Live Dashboard</title>
+  <meta name="description" content="Live dashboard for 3 self-learning AI trading models on BTC/USDT" />
+
+  <!-- Chart.js for candlestick + line charts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <!-- Chart.js Financial plugin for candlesticks -->
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.1.1/dist/chartjs-chart-financial.min.js"></script>
+  <!-- Luxon for time formatting -->
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+  <!-- Chart.js adapter for Luxon -->
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
+
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+  <!-- ── Header ── -->
+  <header class="header">
+    <div class="header-left">
+      <div class="logo">⚡ CryptoBot AI</div>
+      <div class="btc-price">
+        BTC/USDT: <span id="btc-price">Loading...</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="live-indicator">
+        <span class="live-dot"></span> LIVE
+      </div>
+      <div class="last-update">Last update: <span id="last-update">—</span></div>
+    </div>
+  </header>
+
+  <!-- ── Model Cards (3 side by side) ── -->
+  <section class="models-grid">
+
+    <!-- AI-1: 1-Hour -->
+    <div class="model-card" id="card-ai_1h">
+      <div class="card-header">
+        <div class="model-title">
+          <span class="model-icon">🤖</span>
+          <div>
+            <div class="model-name">AI Model #1</div>
+            <div class="model-sub">1-Hour Candles</div>
+          </div>
+        </div>
+        <div class="signal-badge" id="signal-ai_1h">—</div>
+      </div>
+      <div class="card-stats">
+        <div class="stat">
+          <div class="stat-label">Confidence</div>
+          <div class="stat-value" id="conf-ai_1h">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Total P&L</div>
+          <div class="stat-value" id="pnl-ai_1h">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Win Rate</div>
+          <div class="stat-value" id="winrate-ai_1h">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Model v</div>
+          <div class="stat-value" id="version-ai_1h">—</div>
+        </div>
+      </div>
+      <div class="prob-bars" id="probs-ai_1h">
+        <div class="prob-row">
+          <span class="prob-label sell">SELL</span>
+          <div class="prob-bar-bg"><div class="prob-bar sell-bar" id="pb-sell-ai_1h"></div></div>
+          <span class="prob-val" id="pv-sell-ai_1h">0%</span>
+        </div>
+        <div class="prob-row">
+          <span class="prob-label hold">HOLD</span>
+          <div class="prob-bar-bg"><div class="prob-bar hold-bar" id="pb-hold-ai_1h"></div></div>
+          <span class="prob-val" id="pv-hold-ai_1h">0%</span>
+        </div>
+        <div class="prob-row">
+          <span class="prob-label buy">BUY</span>
+          <div class="prob-bar-bg"><div class="prob-bar buy-bar" id="pb-buy-ai_1h"></div></div>
+          <span class="prob-val" id="pv-buy-ai_1h">0%</span>
+        </div>
+      </div>
+      <div class="open-trade-section" id="open-trade-ai_1h"></div>
+    </div>
+
+  </section>
+
+  <!-- ── Candlestick Chart ── -->
+  <section class="chart-section">
+    <div class="chart-header">
+      <div class="chart-title">BTC/USDT Price Chart</div>
+      <div class="chart-controls">
+        <button class="tf-btn active" onclick="switchChart('1h', this)">1H</button>
+      </div>
+    </div>
+    <div class="chart-wrapper">
+      <canvas id="priceChart"></canvas>
+    </div>
+  </section>
+
+  <!-- ── Recent Trades Table ── -->
+  <section class="trades-section">
+    <div class="trades-header">
+      <div class="trades-title">📋 Recent Trades</div>
+      <div class="trades-filter">
+        <button class="filter-btn active" onclick="filterTrades('all', this)">All</button>
+        <button class="filter-btn" onclick="filterTrades('ai_1h', this)">AI-1H</button>
+      </div>
+    </div>
+    <div class="table-wrapper">
+      <table class="trades-table" id="trades-table">
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Signal</th>
+            <th>Entry</th>
+            <th>Exit</th>
+            <th>P&L (USDT)</th>
+            <th>P&L %</th>
+            <th>Confidence</th>
+            <th>Status</th>
+            <th>Time</th>
+          </tr>
+        </thead>
+        <tbody id="trades-body">
+          <tr><td colspan="9" class="empty-row">Loading trades...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>
