@@ -10,6 +10,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 from data.binance_fetcher import load_candles
 from models.predictor import predict
 from models.registry import get_model_info
@@ -22,52 +23,43 @@ router = APIRouter()
 
 @router.get("/api/dashboard")
 def get_dashboard():
-    """
-    Single endpoint that returns everything the dashboard needs.
-    Called by the frontend every 30 seconds.
-
-    Returns:
-      {
-        "models": [ {...model data...}, ... ],
-        "btc_price": float
-      }
-    """
-    # Get latest BTC price from DB (fastest source)
-    btc_price = _get_latest_btc_price()
-
-    models_data = []
-    for timeframe in TIMEFRAMES.keys():
-        model_id = TIMEFRAMES[timeframe]["model_id"]
-
-        # Get latest prediction (if model is trained)
-        prediction = predict(timeframe)
-
-        # Get model metadata
-        info = get_model_info(timeframe)
-
-        # Get trading stats
-        stats    = get_total_pnl(model_id)
-        portfolio = 1000.0 + stats.get("total_pnl", 0.0) # Base portfolio $1000 + PnL
-        open_trades   = get_open_trades(model_id)
-        recent_trades = get_recent_trades(model_id, limit=10)
-
-        models_data.append({
-            "model_id":    model_id,
-            "timeframe":   timeframe,
-            "version":     info["version"],
-            "accuracy":    info["accuracy"],
-            "trained_at":  info["trained_at"],
-            "prediction":  prediction,
-            "portfolio":   round(portfolio, 2),
-            "stats":       stats,
-            "open_trades": open_trades,
-            "recent_trades": recent_trades,
+    """Returns all data needed for the UI dashboard."""
+    try:
+        btc_price = _get_latest_btc_price()
+        
+        models_data = []
+        for timeframe in TIMEFRAMES.keys():
+            model_id = TIMEFRAMES[timeframe]["model_id"]
+            
+            prediction = predict(timeframe)
+            info = get_model_info(timeframe)
+            stats = get_total_pnl(model_id)
+            portfolio = 1000.0 + stats.get("total_pnl", 0.0)
+            open_trades = get_open_trades(model_id)
+            recent_trades = get_recent_trades(model_id, limit=10)
+            
+            models_data.append({
+                "model_id":    model_id,
+                "timeframe":   timeframe,
+                "version":     info["version"],
+                "accuracy":    info["accuracy"],
+                "trained_at":  info["trained_at"],
+                "prediction":  prediction,
+                "portfolio":   round(portfolio, 2),
+                "stats":       stats,
+                "open_trades": open_trades,
+                "recent_trades": recent_trades,
+            })
+            
+        return JSONResponse({
+            "models": models_data,
+            "btc_price": btc_price
         })
-
-    return {
-        "models":    models_data,
-        "btc_price": btc_price,
-    }
+    except Exception as e:
+        import traceback
+        error_msg = f"Dashboard Error: {str(e)}\n{traceback.format_exc()}"
+        print(error_msg, flush=True)
+        return JSONResponse({"error": str(e), "traceback": traceback.format_exc()}, status_code=500)
 
 
 @router.get("/api/candles/{timeframe}")
