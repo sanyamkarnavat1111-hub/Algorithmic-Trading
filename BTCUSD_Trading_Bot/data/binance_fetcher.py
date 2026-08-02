@@ -40,10 +40,14 @@ def _fetch_klines(interval: str, limit: int = 1000,
     if end_ms:
         params["endTime"] = end_ms
 
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+    }
+
     backoff = 1.0
     for attempt in range(5):
         try:
-            response = requests.get(url, params=params, timeout=15)
+            response = requests.get(url, params=params, headers=headers, timeout=15)
             response.raise_for_status()
             return response.json()
         except Exception as e:
