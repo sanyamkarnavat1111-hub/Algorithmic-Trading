@@ -60,23 +60,26 @@ async def lifespan(app: FastAPI):
 
 def bootstrap_system():
     """Check if model exists, if not, fetch data and train initial model."""
-    from models.registry import get_model_info
-    from data.binance_fetcher import sync_timeframe
-    from models.trainer import train
+    try:
+        from models.registry import get_model_info
+        from data.binance_fetcher import sync_timeframe
+        from models.trainer import train
 
-    info = get_model_info("1h")
-    if info["version"] is None:
-        print("\n[Bootstrap] ⚠️ First run detected! DB is empty.")
-        print("[Bootstrap] Fetching historical data (this will take a minute)...")
-        try:
-            sync_timeframe("1h")
-            print("[Bootstrap] Data fetched. Training initial AI model...")
-            train("1h")
-            print("[Bootstrap] ✅ Initial setup complete! Bot is now fully autonomous.\n")
-        except Exception as e:
-            print(f"[Bootstrap] Error during bootstrap: {e}")
-    else:
-        print(f"[Bootstrap] Found existing AI model (v{info['version']}). Resuming operations.")
+        info = get_model_info("1h")
+        if info["version"] is None:
+            print("\n[Bootstrap] ⚠️ First run detected! DB is empty.", flush=True)
+            print("[Bootstrap] Fetching historical data (this will take a minute)...", flush=True)
+            try:
+                sync_timeframe("1h")
+                print("[Bootstrap] Data fetched. Training initial AI model...", flush=True)
+                train("1h")
+                print("[Bootstrap] ✅ Initial setup complete! Bot is now fully autonomous.\n", flush=True)
+            except Exception as e:
+                print(f"[Bootstrap] Error during fetch/train: {e}", flush=True)
+        else:
+            print(f"[Bootstrap] Found existing AI model (v{info['version']}). Resuming operations.", flush=True)
+    except Exception as e:
+        print(f"[Bootstrap] CRITICAL THREAD ERROR: {e}", flush=True)
 
 
 app = FastAPI(
