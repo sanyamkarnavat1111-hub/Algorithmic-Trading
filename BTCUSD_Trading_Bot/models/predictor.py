@@ -86,7 +86,7 @@ def predict(timeframe: str) -> dict:
         "timeframe":    timeframe,
         "signal":       signal,
         "confidence":   round(confidence, 4),
-        "should_trade": confidence >= MIN_CONFIDENCE and signal != "HOLD",
+        "should_trade": signal != "HOLD",
         "current_price": current_price,
         "atr":          round(atr, 2),
         "probabilities": {

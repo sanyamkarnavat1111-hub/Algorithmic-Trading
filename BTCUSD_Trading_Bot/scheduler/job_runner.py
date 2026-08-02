@@ -55,6 +55,10 @@ def heartbeat():
             new_trade = open_trade(prediction)
             if new_trade:
                 print(f"[Scheduler] {MODEL_ID}: Opened {signal} trade")
+        else:
+            from trading.paper_trader import record_skipped_trade
+            record_skipped_trade(prediction)
+            print(f"[Scheduler] {MODEL_ID}: Recorded SKIPPED trade ({signal})")
 
     except Exception as e:
         log_event("ERROR", f"Heartbeat error: {str(e)}", model_id=MODEL_ID)

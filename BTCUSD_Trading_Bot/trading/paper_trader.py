@@ -96,6 +96,29 @@ def open_trade(prediction: dict) -> dict | None:
     return trade
 
 
+def record_skipped_trade(prediction: dict):
+    """
+    Record a HOLD or low-confidence prediction so it appears in the UI history,
+    without affecting P&L or actual trading positions.
+    """
+    model_id      = prediction["model_id"]
+    signal        = prediction["signal"]
+    confidence    = prediction["confidence"]
+    current_price = prediction["current_price"]
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO trades
+                  (model_id, signal, confidence, entry_price, exit_price, stop_loss, position_size, pnl, pnl_pct, status, opened_at, closed_at)
+                VALUES (%s, %s, %s, %s, %s, 0, 0, 0, 0, 'SKIPPED', NOW(), NOW())
+            """, (model_id, signal, confidence, current_price, current_price))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def check_and_close_trades(model_id: str, current_price: float, exit_signal: str = None):
     """
     Check all open trades for a model. Close them if:
@@ -261,7 +284,7 @@ def get_total_pnl(model_id: str) -> dict:
                     COALESCE(SUM(pnl), 0)                        AS total_pnl,
                     COALESCE(AVG(pnl_pct) * 100, 0)             AS avg_pnl_pct
                 FROM trades
-                WHERE model_id = %s AND status != 'OPEN'
+                WHERE model_id = %s AND status IN ('CLOSED', 'STOPPED_OUT')
             """, (model_id,))
             row = cur.fetchone()
     finally:
