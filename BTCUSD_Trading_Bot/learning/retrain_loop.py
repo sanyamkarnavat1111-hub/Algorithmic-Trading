@@ -38,7 +38,7 @@ def get_last_retrain_count() -> int:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT message FROM app_logs
-                WHERE model_id = %s AND message LIKE 'RETRAIN_COUNT:%'
+                WHERE model_id = %s AND message LIKE 'RETRAIN_COUNT:%%'
                 ORDER BY created_at DESC LIMIT 1
             """, (MODEL_ID,))
             row = cur.fetchone()

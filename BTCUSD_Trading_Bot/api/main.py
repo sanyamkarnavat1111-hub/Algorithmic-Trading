@@ -41,6 +41,10 @@ async def lifespan(app: FastAPI):
     create_tables()
     print("[OK] Database tables ready")
 
+    # Test Binance API connection immediately
+    from data.binance_fetcher import test_binance_connection
+    test_binance_connection()
+
     # Start background scheduler
     scheduler = start_scheduler()
     print("[OK] Scheduler started")

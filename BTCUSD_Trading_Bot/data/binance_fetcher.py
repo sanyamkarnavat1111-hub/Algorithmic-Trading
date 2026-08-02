@@ -96,6 +96,28 @@ def _save_candles(df: pd.DataFrame, timeframe: str):
 
 # ── Public functions ──────────────────────────────────────────────────────────
 
+def test_binance_connection():
+    """Quick check to verify Binance API is reachable and not IP banned."""
+    print("[Binance] Testing API connection to verify IP is not banned...")
+    url = f"{BINANCE_BASE_URL}/api/v3/ping"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=5)
+        response.raise_for_status()
+        print("[Binance] ✅ API connection successful! Ready to fetch data.")
+        return True
+    except requests.exceptions.HTTPError as e:
+        print(f"[Binance] ❌ API HTTP Error: {e.response.status_code} - {e.response.reason}")
+        if e.response.status_code == 418:
+            print("[Binance] ⚠️ This IP address is currently BANNED (418 I'm a teapot).")
+        return False
+    except Exception as e:
+        print(f"[Binance] ❌ API Connection Failed: {e}")
+        return False
+
+
 def sync_timeframe(timeframe: str):
     """
     Incremental synchronization for a given timeframe.
