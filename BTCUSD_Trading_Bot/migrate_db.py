@@ -83,7 +83,9 @@ def run_migration():
     tables_to_migrate = [
         "candles",
         "model_store",
-        "model_versions"
+        "model_versions",
+        "scalers",
+        "trades"
     ]
 
     for table in tables_to_migrate:
