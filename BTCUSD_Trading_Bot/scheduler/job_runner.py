@@ -15,6 +15,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from datetime import datetime
 
 from data.binance_fetcher import fetch_latest
 from models.predictor import predict
@@ -78,6 +79,7 @@ def start_scheduler():
         id="heartbeat",
         replace_existing=True,
         max_instances=1,    # never run two heartbeats simultaneously
+        next_run_time=datetime.now() # Trigger the first run immediately on startup
     )
     scheduler.start()
     print(f"[Scheduler] Started — running every {HEARTBEAT_MINUTES} minutes")
