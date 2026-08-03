@@ -1,6 +1,12 @@
 """
 data/database.py — PostgreSQL connection and table creation.
-Pure PostgreSQL implementation using psycopg2.
+
+Tables:
+  - candles: raw 15-min OHLCV data from Binance
+  - trades: all buy/sell actions taken by the bot
+  - portfolio: current USDT and BTC balances
+  - predictions_log: what the models predicted (for accuracy tracking)
+  - app_logs: application-level logging
 """
 
 import sys
@@ -18,9 +24,9 @@ def get_connection():
 
 
 def create_tables():
-    """Create all tables if they don't already exist. Safe to run multiple times."""
+    """Create all tables if they don't exist. Safe to run multiple times."""
     sql = """
-    -- Raw OHLCV candle data from Binance
+    -- Raw OHLCV candle data from Binance (15-min candles)
     CREATE TABLE IF NOT EXISTS candles (
         id          SERIAL PRIMARY KEY,
         timeframe   VARCHAR(10)   NOT NULL,
@@ -34,49 +40,51 @@ def create_tables():
         UNIQUE (timeframe, open_time)
     );
 
-    -- Computed features for each candle (stored as JSONB for flexibility)
-    CREATE TABLE IF NOT EXISTS features (
-        id           SERIAL PRIMARY KEY,
-        timeframe    VARCHAR(10) NOT NULL,
-        open_time    TIMESTAMP   NOT NULL,
-        feature_data JSONB       NOT NULL,
-        label        SMALLINT,           -- 0=SELL, 1=HOLD, 2=BUY
-        created_at   TIMESTAMP   DEFAULT NOW(),
-        UNIQUE (timeframe, open_time)
-    );
-
-    -- All paper trades made by any AI model
+    -- All buy/sell trades executed by the bot
     CREATE TABLE IF NOT EXISTS trades (
-        id            SERIAL PRIMARY KEY,
-        model_id      VARCHAR(20)   NOT NULL,
-        signal        VARCHAR(10)   NOT NULL,
-        confidence    NUMERIC(5,4)  NOT NULL,
-        entry_price   NUMERIC(20,8) NOT NULL,
-        exit_price    NUMERIC(20,8),
-        stop_loss     NUMERIC(20,8) NOT NULL,
-        position_size NUMERIC(20,8) NOT NULL,
-        pnl           NUMERIC(20,8),
-        pnl_pct       NUMERIC(10,6),
-        status        VARCHAR(20)   NOT NULL DEFAULT 'OPEN',
-        opened_at     TIMESTAMP     DEFAULT NOW(),
-        closed_at     TIMESTAMP
+        id              SERIAL PRIMARY KEY,
+        model_id        VARCHAR(20)   NOT NULL,
+        action          VARCHAR(10)   NOT NULL,
+        amount_usdt     NUMERIC(20,8) NOT NULL,
+        btc_quantity    NUMERIC(20,8) NOT NULL,
+        price           NUMERIC(20,8) NOT NULL,
+        predicted_high  NUMERIC(20,8),
+        predicted_low   NUMERIC(20,8),
+        direction_signal VARCHAR(10),
+        confidence      NUMERIC(5,4),
+        pnl             NUMERIC(20,8),
+        created_at      TIMESTAMP     DEFAULT NOW()
     );
 
-    -- Model version history — tracks every retrain
-    CREATE TABLE IF NOT EXISTS model_versions (
-        id           SERIAL PRIMARY KEY,
-        model_id     VARCHAR(20)  NOT NULL,
-        version      INTEGER      NOT NULL,
-        trained_at   TIMESTAMP    DEFAULT NOW(),
-        train_rows   INTEGER,
-        accuracy     NUMERIC(6,4),
-        is_active    BOOLEAN      DEFAULT FALSE
+    -- Current portfolio state
+    CREATE TABLE IF NOT EXISTS portfolio (
+        id              SERIAL PRIMARY KEY,
+        model_id        VARCHAR(20)   NOT NULL UNIQUE,
+        usdt_balance    NUMERIC(20,8) NOT NULL,
+        btc_quantity    NUMERIC(20,8) NOT NULL DEFAULT 0,
+        btc_avg_price   NUMERIC(20,8) NOT NULL DEFAULT 0,
+        updated_at      TIMESTAMP     DEFAULT NOW()
     );
 
-    -- Application logs (only warnings/errors + key events, cleaned after retrain)
+    -- Predictions log (for tracking accuracy over time)
+    CREATE TABLE IF NOT EXISTS predictions_log (
+        id              SERIAL PRIMARY KEY,
+        model_id        VARCHAR(20)   NOT NULL,
+        predicted_at    TIMESTAMP     NOT NULL DEFAULT NOW(),
+        current_price   NUMERIC(20,8) NOT NULL,
+        direction       VARCHAR(10)   NOT NULL,
+        confidence      NUMERIC(5,4)  NOT NULL,
+        predicted_high  NUMERIC(20,8) NOT NULL,
+        predicted_low   NUMERIC(20,8) NOT NULL,
+        actual_high     NUMERIC(20,8),
+        actual_low      NUMERIC(20,8),
+        was_correct     BOOLEAN
+    );
+
+    -- Application logs
     CREATE TABLE IF NOT EXISTS app_logs (
         id         SERIAL PRIMARY KEY,
-        level      VARCHAR(10)  NOT NULL,  -- INFO, WARNING, ERROR
+        level      VARCHAR(10)  NOT NULL,
         model_id   VARCHAR(20),
         message    TEXT         NOT NULL,
         created_at TIMESTAMP    DEFAULT NOW()
@@ -88,7 +96,7 @@ def create_tables():
         with conn.cursor() as cur:
             cur.execute(sql)
         conn.commit()
-        print("[DB] All PostgreSQL tables created / verified.")
+        print("[DB] All tables created / verified.")
     finally:
         conn.close()
 
@@ -108,20 +116,14 @@ def log_event(level: str, message: str, model_id: str = None):
 
 
 def clean_old_logs(days_to_keep: int = 7):
-    """Delete logs older than `days_to_keep` days."""
+    """Delete logs older than N days."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute("""
                 DELETE FROM app_logs
-                WHERE level = 'INFO'
-                  AND created_at < NOW() - INTERVAL '%s days'
+                WHERE created_at < NOW() - INTERVAL '%s days'
             """, (days_to_keep,))
-            cur.execute("""
-                DELETE FROM app_logs
-                WHERE level IN ('WARNING', 'ERROR')
-                  AND created_at < NOW() - INTERVAL '30 days'
-            """)
         conn.commit()
     finally:
         conn.close()

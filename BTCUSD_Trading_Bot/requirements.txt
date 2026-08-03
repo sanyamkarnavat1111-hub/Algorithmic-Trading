@@ -1,29 +1,27 @@
-# Core
+# Web framework
 fastapi
 uvicorn[standard]
-mplfinance
 
 # Database
 psycopg2-binary
-sqlalchemy
 
 # Binance API
 requests
 
-# Feature Engineering
+# Data processing
 pandas
-pandas-ta
 numpy
-scikit-learn
 
-# ML Model
+# Feature engineering
+pandas-ta
+
+# ML
 lightgbm
+scikit-learn
+joblib
 
 # Scheduling
 apscheduler
 
 # Environment
 python-dotenv
-
-# Model serialization
-joblib
