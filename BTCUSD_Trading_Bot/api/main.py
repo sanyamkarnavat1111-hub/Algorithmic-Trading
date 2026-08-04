@@ -1,14 +1,13 @@
 """
 api/main.py — FastAPI application entry point.
 
-Startup order:
-  1. Server starts IMMEDIATELY and binds to port (Render sees it's alive)
-  2. Self-ping thread keeps server awake every 5 minutes
-  3. User clicks buttons on dashboard to trigger: fetch data, train models
-  4. No auto-drop of tables — incremental by design
+Routes:
+  /       → Trading dashboard (Phase 2 — shows predictions, portfolio, charts)
+  /admin  → Setup & control panel (fetch data, train models, live logs)
+  /health → Keep-alive endpoint for Render
 
-The data fetch and training are triggered manually via the dashboard
-so they can be resumed if the server ever spins down.
+Server starts immediately (no blocking). All heavy operations run in background.
+Self-ping keeps Render alive.
 """
 
 import sys
@@ -17,6 +16,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from collections import deque
 import threading
 import time
 import traceback
@@ -28,90 +28,74 @@ from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 
 from config import API_HOST, API_PORT
 
-# Path to the UI folder
 UI_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ui")
 
-# ── Global State ──────────────────────────────────────────────────────────────
+# ── Global State & Live Logs ──────────────────────────────────────────────────
 
+# Status tracks what the bot is doing right now
 status = {
-    "state": "idle",          # idle, fetching, training_direction, training_range, complete, error
-    "message": "Server is up. Use dashboard to start.",
+    "state": "idle",
     "candles_fetched": 0,
     "direction_f1": None,
     "range_mae_high": None,
     "range_mae_low": None,
-    "last_error": None,
+    "scheduler_running": False,
 }
 
-# Lock to prevent running multiple operations at once
+# Live log buffer (last 200 lines — polled by dashboard every 3 seconds)
+live_logs = deque(maxlen=200)
 operation_lock = threading.Lock()
 
 
-# ── Self-Ping: keeps Render free tier alive ───────────────────────────────────
+def log(msg: str):
+    """Add a timestamped message to the live log buffer AND print to stdout."""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    line = f"[{timestamp}] {msg}"
+    live_logs.append(line)
+    print(line, flush=True)
+
+
+# ── Self-Ping ─────────────────────────────────────────────────────────────────
 
 def self_ping_loop():
-    """
-    Pings own /health endpoint every 5 minutes to prevent Render spin-down.
-    More reliable than external cron jobs because it runs inside the process.
-    """
-    # Wait 30 seconds for server to fully start
+    """Pings /health every 5 min to keep Render awake."""
     time.sleep(30)
-
-    port = API_PORT
-    url = f"http://localhost:{port}/health"
-
     while True:
         try:
-            http_requests.get(url, timeout=5)
+            http_requests.get(f"http://localhost:{API_PORT}/health", timeout=5)
         except Exception:
-            pass  # Server might not be ready yet, that's fine
-        time.sleep(300)  # Every 5 minutes
+            pass
+        time.sleep(300)
 
 
-# ── Operations (triggered by dashboard buttons) ──────────────────────────────
-
-def run_setup_tables():
-    """Create tables if they don't exist (does NOT drop existing data)."""
-    global status
-    try:
-        from data.database import create_tables
-        create_tables()
-        status["message"] = "Tables ready."
-        print("[Setup] ✅ Tables created/verified.", flush=True)
-        return True
-    except Exception as e:
-        status["state"] = "error"
-        status["last_error"] = str(e)
-        print(f"[Setup] ❌ Table creation failed: {e}", flush=True)
-        return False
-
+# ── Background Operations ─────────────────────────────────────────────────────
 
 def run_fetch_data():
-    """Fetch 15-min candles from Binance. Resumes from last candle in DB."""
+    """Fetch 15-min candles. Resumes from last candle (incremental)."""
     global status
-
     if not operation_lock.acquire(blocking=False):
-        status["message"] = "Another operation is already running."
+        log("⚠️ Another operation is running. Try again later.")
         return
-
     try:
         status["state"] = "fetching"
-        status["message"] = "Fetching 15-min candles from Binance (incremental)..."
-        print("\n[Fetch] Starting 15-min candle fetch...", flush=True)
+        log("━━━ STARTING DATA FETCH ━━━")
 
-        run_setup_tables()
+        # Ensure tables exist
+        from data.database import create_tables
+        create_tables()
+        log("Tables verified.")
 
         from data.binance_fetcher import test_binance_connection, sync_timeframe
 
         if not test_binance_connection():
+            log("❌ Cannot reach Binance API.")
             status["state"] = "error"
-            status["message"] = "Cannot reach Binance API."
-            status["last_error"] = "Binance API unreachable"
             return
 
+        log("Connected to Binance. Fetching 15-min candles (resumes from last saved)...")
         sync_timeframe("15m")
 
-        # Count candles in DB
+        # Count total candles
         from data.database import get_connection
         conn = get_connection()
         try:
@@ -123,62 +107,60 @@ def run_fetch_data():
 
         status["candles_fetched"] = count
         status["state"] = "idle"
-        status["message"] = f"Fetch complete. {count:,} candles in DB."
-        print(f"[Fetch] ✅ Done. {count:,} candles in database.", flush=True)
+        log(f"✅ Data fetch complete. {count:,} candles in database.")
+        log("━━━ FETCH DONE ━━━")
 
     except Exception as e:
         status["state"] = "error"
-        status["message"] = f"Fetch failed: {str(e)}"
-        status["last_error"] = str(e)
-        print(f"[Fetch] ❌ Failed: {e}", flush=True)
+        log(f"❌ Fetch failed: {e}")
         traceback.print_exc()
     finally:
         operation_lock.release()
 
 
 def run_train_direction():
-    """Train the Direction Model (BUY/SELL/HOLD)."""
+    """Train Direction Model (BUY/SELL/HOLD classification)."""
     global status
-
     if not operation_lock.acquire(blocking=False):
-        status["message"] = "Another operation is already running."
+        log("⚠️ Another operation is running.")
         return
-
     try:
         status["state"] = "training_direction"
-        status["message"] = "Training Direction Model..."
-        print("\n[Train] Starting Direction Model training...", flush=True)
+        log("━━━ TRAINING DIRECTION MODEL ━━━")
+        log("This may take a few minutes...")
 
         from models.direction_trainer import train
         result = train(warm_start=False)
 
         status["direction_f1"] = result["f1_weighted"]
         status["state"] = "idle"
-        status["message"] = f"Direction Model trained. F1={result['f1_weighted']:.4f}"
-        print(f"[Train] ✅ Direction Model done. F1={result['f1_weighted']:.4f}", flush=True)
+        log(f"✅ Direction Model trained!")
+        log(f"   F1 Weighted: {result['f1_weighted']:.4f} (target ≥ 0.47)")
+        log(f"   F1 Macro: {result['f1_macro']:.4f}")
+        log(f"   Accuracy: {result['accuracy']:.4f}")
+        log(f"   CV Mean F1: {result['cv_mean_f1']:.4f}")
+        log(f"   Train rows: {result['train_rows']:,}")
+        log(f"   Version: v{result['version']}")
+        log("━━━ DIRECTION TRAINING DONE ━━━")
 
     except Exception as e:
         status["state"] = "error"
-        status["message"] = f"Direction training failed: {str(e)}"
-        status["last_error"] = str(e)
-        print(f"[Train] ❌ Direction training failed: {e}", flush=True)
+        log(f"❌ Direction training failed: {e}")
         traceback.print_exc()
     finally:
         operation_lock.release()
 
 
 def run_train_range():
-    """Train the Range Model (HIGH + LOW prediction)."""
+    """Train Range Model (HIGH + LOW regression)."""
     global status
-
     if not operation_lock.acquire(blocking=False):
-        status["message"] = "Another operation is already running."
+        log("⚠️ Another operation is running.")
         return
-
     try:
         status["state"] = "training_range"
-        status["message"] = "Training Range Model (HIGH + LOW)..."
-        print("\n[Train] Starting Range Model training...", flush=True)
+        log("━━━ TRAINING RANGE MODEL ━━━")
+        log("Training HIGH and LOW predictors...")
 
         from models.range_trainer import train
         result = train(warm_start=False)
@@ -186,278 +168,333 @@ def run_train_range():
         status["range_mae_high"] = result["mae_high"]
         status["range_mae_low"] = result["mae_low"]
         status["state"] = "idle"
-        status["message"] = (f"Range Model trained. "
-                             f"HIGH MAE=${result['mae_high']:.2f}, "
-                             f"LOW MAE=${result['mae_low']:.2f}")
-        print(f"[Train] ✅ Range Model done. "
-              f"HIGH MAE=${result['mae_high']:.2f}, LOW MAE=${result['mae_low']:.2f}", flush=True)
+        log(f"✅ Range Model trained!")
+        log(f"   HIGH — MAE: ${result['mae_high']:,.2f} | RMSE: ${result['rmse_high']:,.2f} | R²: {result['r2_high']:.4f}")
+        log(f"   LOW  — MAE: ${result['mae_low']:,.2f} | RMSE: ${result['rmse_low']:,.2f} | R²: {result['r2_low']:.4f}")
+        log(f"   HIGH error as % of price: {result['pct_error_high']:.3f}%")
+        log(f"   LOW error as % of price: {result['pct_error_low']:.3f}%")
+        log("━━━ RANGE TRAINING DONE ━━━")
 
     except Exception as e:
         status["state"] = "error"
-        status["message"] = f"Range training failed: {str(e)}"
-        status["last_error"] = str(e)
-        print(f"[Train] ❌ Range training failed: {e}", flush=True)
+        log(f"❌ Range training failed: {e}")
         traceback.print_exc()
     finally:
         operation_lock.release()
 
 
 def run_start_scheduler():
-    """Start the 15-min heartbeat scheduler."""
+    """Start the 15-min trading scheduler."""
     global status
     try:
         from scheduler.job_runner import start_scheduler
         start_scheduler()
-        status["message"] = "Scheduler running (15-min heartbeat)."
-        print("[Scheduler] ✅ Started.", flush=True)
+        status["scheduler_running"] = True
+        log("✅ Scheduler started! Bot will trade every 15 minutes.")
     except Exception as e:
-        status["last_error"] = str(e)
-        print(f"[Scheduler] ❌ Failed: {e}", flush=True)
+        log(f"❌ Scheduler failed: {e}")
 
 
-# ── Startup ───────────────────────────────────────────────────────────────────
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Server starts immediately. Self-ping keeps it alive."""
-    print("\n[START] Server binding to port...", flush=True)
-
-    # Start self-ping thread to keep Render alive
-    ping_thread = threading.Thread(target=self_ping_loop, daemon=True)
-    ping_thread.start()
-    print("[START] Self-ping thread started (every 5 min).", flush=True)
-    print("[START] ✅ Server is LIVE. Visit dashboard to control bot.", flush=True)
-
-    yield
-
-    print("[EXIT] Server shutting down.", flush=True)
-
-
-# ── FastAPI App ───────────────────────────────────────────────────────────────
-
-app = FastAPI(
-    title="BTC Trading Bot",
-    version="2.0.0",
-    lifespan=lifespan,
-)
-
-# Serve static files
-if os.path.exists(UI_DIR):
-    app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
-
-
-# ── API Endpoints ─────────────────────────────────────────────────────────────
-
-@app.get("/health")
-def health_check():
-    """Health endpoint — keeps Render alive."""
-    return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
-
-
-@app.get("/api/status")
-def get_status():
-    """Returns current bot status for the dashboard."""
-    return JSONResponse(content=status)
-
-
-@app.post("/api/fetch-data")
-def trigger_fetch():
-    """Trigger data fetch (runs in background thread)."""
-    if status["state"] not in ("idle", "error", "complete"):
-        return JSONResponse({"error": "Operation already running"}, status_code=409)
-    threading.Thread(target=run_fetch_data, daemon=True).start()
-    return {"message": "Data fetch started. Check /api/status for progress."}
-
-
-@app.post("/api/train-direction")
-def trigger_train_direction():
-    """Trigger Direction Model training (runs in background thread)."""
-    if status["state"] not in ("idle", "error", "complete"):
-        return JSONResponse({"error": "Operation already running"}, status_code=409)
-    threading.Thread(target=run_train_direction, daemon=True).start()
-    return {"message": "Direction training started. Check /api/status for progress."}
-
-
-@app.post("/api/train-range")
-def trigger_train_range():
-    """Trigger Range Model training (runs in background thread)."""
-    if status["state"] not in ("idle", "error", "complete"):
-        return JSONResponse({"error": "Operation already running"}, status_code=409)
-    threading.Thread(target=run_train_range, daemon=True).start()
-    return {"message": "Range training started. Check /api/status for progress."}
-
-
-@app.post("/api/start-scheduler")
-def trigger_scheduler():
-    """Start the 15-min prediction scheduler."""
-    threading.Thread(target=run_start_scheduler, daemon=True).start()
-    return {"message": "Scheduler starting."}
-
-
-@app.post("/api/reset-tables")
-def trigger_reset():
-    """Drop all tables and recreate (DANGEROUS — use only for fresh start)."""
-    if status["state"] not in ("idle", "error"):
-        return JSONResponse({"error": "Operation running, can't reset"}, status_code=409)
-
+def run_reset_tables():
+    """Drop and recreate all tables."""
+    global status
+    if not operation_lock.acquire(blocking=False):
+        log("⚠️ Another operation is running.")
+        return
     try:
         from data.database import get_connection, create_tables
         conn = get_connection()
         try:
             with conn.cursor() as cur:
                 cur.execute("""
-                    DROP TABLE IF EXISTS candles CASCADE;
-                    DROP TABLE IF EXISTS trades CASCADE;
-                    DROP TABLE IF EXISTS model_store CASCADE;
-                    DROP TABLE IF EXISTS scalers CASCADE;
-                    DROP TABLE IF EXISTS app_logs CASCADE;
-                    DROP TABLE IF EXISTS portfolio CASCADE;
-                    DROP TABLE IF EXISTS predictions_log CASCADE;
+                    DROP TABLE IF EXISTS candles, trades, model_store, scalers,
+                    app_logs, portfolio, predictions_log CASCADE;
                 """)
             conn.commit()
         finally:
             conn.close()
         create_tables()
         status["state"] = "idle"
-        status["message"] = "Tables reset. Ready for fresh start."
         status["candles_fetched"] = 0
         status["direction_f1"] = None
         status["range_mae_high"] = None
         status["range_mae_low"] = None
-        return {"message": "All tables dropped and recreated."}
+        log("🗑️ All tables dropped and recreated. Fresh start.")
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        log(f"❌ Reset failed: {e}")
+    finally:
+        operation_lock.release()
 
+
+# ── Startup ───────────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("[START] Server binding to port...", flush=True)
+    log("Server started. Visit /admin to control the bot.")
+    threading.Thread(target=self_ping_loop, daemon=True).start()
+    log("Self-ping active (keeps Render alive).")
+    yield
+    print("[EXIT] Server stopped.", flush=True)
+
+
+# ── App ───────────────────────────────────────────────────────────────────────
+
+app = FastAPI(title="BTC Trading Bot", version="2.0.0", lifespan=lifespan)
+
+from api.routes import router
+app.include_router(router)
+
+if os.path.exists(UI_DIR):
+    app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "ts": datetime.now(timezone.utc).isoformat()}
+
+
+@app.get("/api/admin-status")
+def admin_status():
+    """Single endpoint the admin dashboard polls for ALL info."""
+    return JSONResponse({
+        **status,
+        "logs": list(live_logs),
+    })
+
+
+@app.post("/api/fetch-data")
+def trigger_fetch():
+    if status["state"] not in ("idle", "error"):
+        return JSONResponse({"ok": False, "msg": "Busy"}, status_code=409)
+    threading.Thread(target=run_fetch_data, daemon=True).start()
+    return {"ok": True}
+
+
+@app.post("/api/train-direction")
+def trigger_train_direction():
+    if status["state"] not in ("idle", "error"):
+        return JSONResponse({"ok": False, "msg": "Busy"}, status_code=409)
+    threading.Thread(target=run_train_direction, daemon=True).start()
+    return {"ok": True}
+
+
+@app.post("/api/train-range")
+def trigger_train_range():
+    if status["state"] not in ("idle", "error"):
+        return JSONResponse({"ok": False, "msg": "Busy"}, status_code=409)
+    threading.Thread(target=run_train_range, daemon=True).start()
+    return {"ok": True}
+
+
+@app.post("/api/start-scheduler")
+def trigger_scheduler():
+    threading.Thread(target=run_start_scheduler, daemon=True).start()
+    return {"ok": True}
+
+
+@app.post("/api/reset-tables")
+def trigger_reset():
+    if status["state"] not in ("idle", "error"):
+        return JSONResponse({"ok": False, "msg": "Busy"}, status_code=409)
+    threading.Thread(target=run_reset_tables, daemon=True).start()
+    return {"ok": True}
+
+
+# ── Trading Dashboard (/) ─────────────────────────────────────────────────────
 
 @app.get("/")
-def serve_dashboard():
-    """Serve the control dashboard."""
-    return HTMLResponse(content=DASHBOARD_HTML)
+def serve_trading_dashboard():
+    """Main trading dashboard (Phase 2)."""
+    index_path = os.path.join(UI_DIR, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return HTMLResponse("<h2>Trading dashboard coming soon. Visit <a href='/admin'>/admin</a> for setup.</h2>")
 
 
-# ── Inline Dashboard HTML ─────────────────────────────────────────────────────
+# ── Admin Dashboard (/admin) ──────────────────────────────────────────────────
 
-DASHBOARD_HTML = """<!DOCTYPE html>
+@app.get("/admin")
+def serve_admin():
+    return HTMLResponse(content=ADMIN_HTML)
+
+
+ADMIN_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BTC Trading Bot — Control Panel</title>
+  <title>Bot Admin — Setup & Monitor</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; padding: 24px; }
-    h1 { font-size: 1.5rem; margin-bottom: 8px; color: #818cf8; }
-    .subtitle { color: #64748b; margin-bottom: 32px; font-size: 0.9rem; }
-    .status-card { background: #1e2030; border: 1px solid #2d3348; border-radius: 12px; padding: 20px; margin-bottom: 24px; }
-    .status-label { font-size: 0.75rem; color: #64748b; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
-    .status-value { font-size: 1.1rem; font-weight: 600; }
-    .status-value.idle { color: #94a3b8; }
-    .status-value.fetching, .status-value.training_direction, .status-value.training_range { color: #fbbf24; }
-    .status-value.complete { color: #22c55e; }
-    .status-value.error { color: #ef4444; }
-    .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 16px; }
-    .metric { background: #161825; border-radius: 8px; padding: 12px; text-align: center; }
-    .metric-label { font-size: 0.7rem; color: #64748b; text-transform: uppercase; }
-    .metric-value { font-size: 1.2rem; font-weight: 700; margin-top: 4px; color: #e2e8f0; }
-    .buttons { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 24px; }
-    button { padding: 14px 20px; border: none; border-radius: 8px; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: all 0.2s; }
-    button:hover { transform: translateY(-1px); }
-    button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-    .btn-fetch { background: #3b82f6; color: white; }
-    .btn-fetch:hover { background: #2563eb; }
-    .btn-direction { background: #8b5cf6; color: white; }
-    .btn-direction:hover { background: #7c3aed; }
-    .btn-range { background: #06b6d4; color: white; }
-    .btn-range:hover { background: #0891b2; }
-    .btn-scheduler { background: #22c55e; color: white; }
-    .btn-scheduler:hover { background: #16a34a; }
-    .btn-reset { background: #ef4444; color: white; }
-    .btn-reset:hover { background: #dc2626; }
-    .log { background: #161825; border-radius: 8px; padding: 16px; margin-top: 24px; font-family: monospace; font-size: 0.8rem; color: #94a3b8; max-height: 200px; overflow-y: auto; white-space: pre-wrap; }
-    .refresh-note { color: #64748b; font-size: 0.75rem; margin-top: 12px; text-align: center; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0b0d13; color: #e2e8f0; min-height: 100vh; display: flex; flex-direction: column; }
+
+    /* Header */
+    .header { background: #12141d; border-bottom: 1px solid #1e2235; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; }
+    .header h1 { font-size: 1.1rem; color: #818cf8; }
+    .header .badge { font-size: 0.7rem; padding: 4px 10px; border-radius: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+    .badge-idle { background: #1e293b; color: #64748b; }
+    .badge-fetching { background: #422006; color: #fbbf24; }
+    .badge-training_direction, .badge-training_range { background: #1e1b4b; color: #a78bfa; }
+    .badge-error { background: #450a0a; color: #f87171; }
+
+    /* Main layout */
+    .main { display: flex; flex: 1; overflow: hidden; }
+
+    /* Left panel: controls + metrics */
+    .panel { width: 320px; background: #12141d; border-right: 1px solid #1e2235; padding: 20px; overflow-y: auto; }
+    .section-title { font-size: 0.7rem; color: #64748b; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; margin-top: 20px; }
+    .section-title:first-child { margin-top: 0; }
+
+    /* Metrics */
+    .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .metric { background: #1a1d2e; border-radius: 8px; padding: 10px; text-align: center; }
+    .metric-label { font-size: 0.6rem; color: #64748b; text-transform: uppercase; }
+    .metric-value { font-size: 1rem; font-weight: 700; margin-top: 2px; }
+
+    /* Buttons */
+    .actions { display: flex; flex-direction: column; gap: 8px; }
+    .btn { padding: 12px 16px; border: none; border-radius: 8px; font-size: 0.85rem; font-weight: 600; cursor: pointer; text-align: left; transition: all 0.15s; display: flex; align-items: center; gap: 8px; }
+    .btn:hover { transform: translateX(2px); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+    .btn-blue { background: #1d4ed8; color: white; }
+    .btn-purple { background: #6d28d9; color: white; }
+    .btn-cyan { background: #0e7490; color: white; }
+    .btn-green { background: #15803d; color: white; }
+    .btn-red { background: #991b1b; color: white; }
+
+    /* Right panel: live logs */
+    .logs-panel { flex: 1; display: flex; flex-direction: column; padding: 20px; }
+    .logs-header { font-size: 0.7rem; color: #64748b; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; display: flex; justify-content: space-between; }
+    .logs { flex: 1; background: #0f1119; border: 1px solid #1e2235; border-radius: 8px; padding: 14px; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 0.75rem; line-height: 1.6; overflow-y: auto; color: #94a3b8; white-space: pre-wrap; word-break: break-word; }
+    .logs .log-line { margin-bottom: 2px; }
+    .logs .log-success { color: #4ade80; }
+    .logs .log-error { color: #f87171; }
+    .logs .log-warn { color: #fbbf24; }
+    .logs .log-header { color: #818cf8; font-weight: 600; }
+
+    @media (max-width: 768px) {
+      .main { flex-direction: column; }
+      .panel { width: 100%; border-right: none; border-bottom: 1px solid #1e2235; }
+      .logs-panel { min-height: 400px; }
+    }
   </style>
 </head>
 <body>
-  <h1>⚡ BTC Trading Bot — Control Panel</h1>
-  <p class="subtitle">15-min candles | Dual AI models (Direction + Range) | BTC/USDT spot</p>
+  <div class="header">
+    <h1>⚡ BTC Trading Bot — Admin</h1>
+    <span class="badge badge-idle" id="badge">IDLE</span>
+  </div>
 
-  <div class="status-card">
-    <div class="status-label">Current Status</div>
-    <div class="status-value" id="state">Loading...</div>
-    <div style="color:#94a3b8; margin-top:8px; font-size:0.85rem;" id="message"></div>
-    <div class="metrics">
-      <div class="metric">
-        <div class="metric-label">Candles in DB</div>
-        <div class="metric-value" id="candles">—</div>
+  <div class="main">
+    <!-- Left: Controls -->
+    <div class="panel">
+      <div class="section-title">System Metrics</div>
+      <div class="metrics">
+        <div class="metric">
+          <div class="metric-label">Candles</div>
+          <div class="metric-value" id="m-candles">—</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Direction F1</div>
+          <div class="metric-value" id="m-f1">—</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">HIGH MAE</div>
+          <div class="metric-value" id="m-high">—</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">LOW MAE</div>
+          <div class="metric-value" id="m-low">—</div>
+        </div>
       </div>
-      <div class="metric">
-        <div class="metric-label">Direction F1</div>
-        <div class="metric-value" id="f1">—</div>
+
+      <div class="section-title">Actions</div>
+      <div class="actions">
+        <button class="btn btn-blue" id="btn-fetch" onclick="doAction('fetch-data')">📥 Fetch / Resume Data</button>
+        <button class="btn btn-purple" id="btn-dir" onclick="doAction('train-direction')">🧠 Train Direction Model</button>
+        <button class="btn btn-cyan" id="btn-range" onclick="doAction('train-range')">📈 Train Range Model</button>
+        <button class="btn btn-green" id="btn-sched" onclick="doAction('start-scheduler')">⏱️ Start Live Trading</button>
+        <button class="btn btn-red" id="btn-reset" onclick="if(confirm('DELETE all data?')) doAction('reset-tables')">🗑️ Reset Everything</button>
       </div>
-      <div class="metric">
-        <div class="metric-label">Range HIGH MAE</div>
-        <div class="metric-value" id="mae-high">—</div>
+
+      <div class="section-title">How to Use</div>
+      <div style="font-size:0.75rem; color:#64748b; line-height:1.5;">
+        1. Click <b>Fetch Data</b> — downloads BTC candles<br>
+        2. Click <b>Train Direction</b> — trains BUY/SELL/HOLD model<br>
+        3. Click <b>Train Range</b> — trains HIGH/LOW predictor<br>
+        4. Click <b>Start Live Trading</b> — bot trades every 15 min<br><br>
+        If server restarts, just click Fetch again (it resumes).
       </div>
-      <div class="metric">
-        <div class="metric-label">Range LOW MAE</div>
-        <div class="metric-value" id="mae-low">—</div>
+    </div>
+
+    <!-- Right: Live Logs -->
+    <div class="logs-panel">
+      <div class="logs-header">
+        <span>Live Logs (auto-refresh 3s)</span>
+        <span id="log-count">0 lines</span>
       </div>
+      <div class="logs" id="logs"></div>
     </div>
   </div>
 
-  <div class="buttons">
-    <button class="btn-fetch" onclick="doAction('/api/fetch-data')">📥 Fetch / Resume Data</button>
-    <button class="btn-direction" onclick="doAction('/api/train-direction')">🧠 Train Direction Model</button>
-    <button class="btn-range" onclick="doAction('/api/train-range')">📈 Train Range Model</button>
-    <button class="btn-scheduler" onclick="doAction('/api/start-scheduler')">⏱️ Start Scheduler</button>
-    <button class="btn-reset" onclick="if(confirm('This will DELETE all data. Are you sure?')) doAction('/api/reset-tables')">🗑️ Reset All Tables</button>
-  </div>
-
-  <div class="log" id="log">Waiting for status...</div>
-  <div class="refresh-note">Status refreshes every 3 seconds</div>
-
   <script>
-    const logEl = document.getElementById('log');
-    let logLines = [];
+    const logsEl = document.getElementById('logs');
+    let prevLogCount = 0;
 
-    function addLog(msg) {
-      const time = new Date().toLocaleTimeString();
-      logLines.push(`[${time}] ${msg}`);
-      if (logLines.length > 50) logLines.shift();
-      logEl.textContent = logLines.join('\\n');
-      logEl.scrollTop = logEl.scrollHeight;
-    }
-
-    async function fetchStatus() {
+    async function poll() {
       try {
-        const res = await fetch('/api/status');
+        const res = await fetch('/api/admin-status');
         const data = await res.json();
-        const stateEl = document.getElementById('state');
-        stateEl.textContent = data.state.toUpperCase();
-        stateEl.className = 'status-value ' + data.state;
-        document.getElementById('message').textContent = data.message || '';
-        document.getElementById('candles').textContent = data.candles_fetched ? data.candles_fetched.toLocaleString() : '—';
-        document.getElementById('f1').textContent = data.direction_f1 ? data.direction_f1.toFixed(4) : '—';
-        document.getElementById('mae-high').textContent = data.range_mae_high ? '$' + data.range_mae_high.toFixed(2) : '—';
-        document.getElementById('mae-low').textContent = data.range_mae_low ? '$' + data.range_mae_low.toFixed(2) : '—';
+
+        // Badge
+        const badge = document.getElementById('badge');
+        badge.textContent = data.state.toUpperCase().replace('_', ' ');
+        badge.className = 'badge badge-' + data.state;
+
+        // Metrics
+        document.getElementById('m-candles').textContent = data.candles_fetched ? data.candles_fetched.toLocaleString() : '—';
+        document.getElementById('m-f1').textContent = data.direction_f1 ? data.direction_f1.toFixed(4) : '—';
+        document.getElementById('m-high').textContent = data.range_mae_high ? '$' + data.range_mae_high.toFixed(0) : '—';
+        document.getElementById('m-low').textContent = data.range_mae_low ? '$' + data.range_mae_low.toFixed(0) : '—';
+
+        // Disable buttons when busy
+        const busy = !['idle', 'error'].includes(data.state);
+        document.getElementById('btn-fetch').disabled = busy;
+        document.getElementById('btn-dir').disabled = busy;
+        document.getElementById('btn-range').disabled = busy;
+        document.getElementById('btn-reset').disabled = busy;
+
+        // Logs
+        if (data.logs && data.logs.length !== prevLogCount) {
+          prevLogCount = data.logs.length;
+          logsEl.innerHTML = data.logs.map(line => {
+            let cls = '';
+            if (line.includes('✅')) cls = 'log-success';
+            else if (line.includes('❌')) cls = 'log-error';
+            else if (line.includes('⚠️')) cls = 'log-warn';
+            else if (line.includes('━━━')) cls = 'log-header';
+            return `<div class="log-line ${cls}">${escHtml(line)}</div>`;
+          }).join('');
+          logsEl.scrollTop = logsEl.scrollHeight;
+          document.getElementById('log-count').textContent = data.logs.length + ' lines';
+        }
       } catch(e) {
-        document.getElementById('state').textContent = 'OFFLINE';
+        document.getElementById('badge').textContent = 'OFFLINE';
+        document.getElementById('badge').className = 'badge badge-error';
       }
     }
 
-    async function doAction(endpoint) {
-      addLog(`Triggering ${endpoint}...`);
-      try {
-        const res = await fetch(endpoint, { method: 'POST' });
-        const data = await res.json();
-        addLog(data.message || data.error || 'Done');
-      } catch(e) {
-        addLog(`Error: ${e.message}`);
-      }
+    function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+    async function doAction(action) {
+      try { await fetch('/api/' + action, { method: 'POST' }); } catch(e) {}
     }
 
-    fetchStatus();
-    setInterval(fetchStatus, 3000);
+    poll();
+    setInterval(poll, 3000);
   </script>
 </body>
 </html>"""

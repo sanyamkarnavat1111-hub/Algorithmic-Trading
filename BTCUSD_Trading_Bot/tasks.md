@@ -73,36 +73,35 @@
 - Loads direction + range_high + range_low models
 - Returns: {direction, confidence, predicted_high, predicted_low, current_price}
 
-### Task 9: Build portfolio manager ⬜
-- New file: trading/portfolio_manager.py
-- Track: USDT balance, BTC quantity, average buy price
+### Task 9: Build portfolio manager ✅
+- trading/portfolio_manager.py created
+- Tracks: USDT balance, BTC quantity, average buy price
 - buy_btc(amount_usdt, price) and sell_btc(quantity, price)
 - Cannot sell more BTC than held (no shorting)
-- Multiple open positions allowed
-- Store transactions in trades table
+- Multiple positions allowed (can buy multiple times)
+- Records all transactions in trades table
 - No stop-loss, no circuit breaker
 
-### Task 10: Build decision engine ⬜
-- New file: decision/engine.py
-- Combines both model outputs into trade actions
-- BUY: direction=BUY + predicted_high meaningfully above current price → buy $100-200 BTC
-- SELL: direction=SELL + bot holds BTC → sell
+### Task 10: Build decision engine ✅
+- decision/engine.py created
+- BUY: direction=BUY + confidence≥55% + predicted_high > current+0.1% → buy $100-200 BTC
+- SELL: direction=SELL + bot holds BTC → sell all
 - HOLD: do nothing
-- Exit if current_price ≥ predicted_high (target hit)
-- Exit if current_price ≤ predicted_low (prediction wrong, cut)
-- Log reasoning for each decision
+- Exit target: current_price ≥ predicted_high → sell
+- Exit range breach: current_price ≤ predicted_low → sell
+- Logs reasoning for every decision
 
 ### Task 11: Update scheduler to 15-min heartbeat ✅
-- scheduler/job_runner.py rewritten
-- Every 15 min: fetch → predict → log
-- Trade execution will be added after Phase 2 tasks
+- scheduler/job_runner.py rewritten with full pipeline
+- Every 15 min: fetch → predict → decide → trade → log → check retrain
+- Logs predictions for accuracy tracking
 
-### Task 12: Update retraining loop for both models ⬜
-- Rewrite learning/retrain_loop.py
-- Count closed trades, trigger at 100
-- Retrain direction model (warm-start)
-- Retrain range model (warm-start)
-- Deploy new version only if equal or better score
+### Task 12: Update retraining loop for both models ✅
+- learning/retrain_loop.py rewritten
+- Counts closed trades, triggers at 100
+- Retrains direction model (warm-start)
+- Retrains range model (warm-start)
+- Updates prediction accuracy (compares predictions vs actual outcomes)
 
 ### Task 13: Update database schema ✅
 - data/database.py rewritten with new schema
@@ -117,10 +116,14 @@
 - Show predictions (direction + predicted high/low)
 - Show portfolio state
 
-### Task 15: Clean up old code ⬜
-- Delete trading/risk_manager.py
-- Remove old trainer.py (replaced by direction_trainer.py + range_trainer.py)
-- Update README.md with new setup instructions
+### Task 15: Clean up old code ✅
+- Deleted trading/risk_manager.py
+- Deleted trading/paper_trader.py (replaced by portfolio_manager.py)
+- Deleted models/trainer.py (replaced by direction_trainer.py + range_trainer.py)
+- Deleted migrate_db.py, check_db.py, check_db_size.py, plot_candles.py
+- Deleted implementation_plan.md
+- Removed sqlalchemy, mplfinance from requirements.txt
+- requirements.txt cleaned up
 
 ---
 
