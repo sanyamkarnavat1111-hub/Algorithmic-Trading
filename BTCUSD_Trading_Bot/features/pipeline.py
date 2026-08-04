@@ -81,7 +81,7 @@ def generate_range_labels(df: pd.DataFrame) -> pd.DataFrame:
     """
     Generate HIGH and LOW labels for the Range Model.
 
-    For each candle, looks at the next 5 candles and finds:
+    For each candle at index i, looks at candles i+1 through i+5 and finds:
       - range_high_label: the MAXIMUM high price across those 5 candles
       - range_low_label: the MINIMUM low price across those 5 candles
 
@@ -89,22 +89,21 @@ def generate_range_labels(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
 
-    # Rolling max of HIGH over next 5 candles (shift to look forward)
-    # We reverse, do rolling max, then reverse back
-    high_reversed = df["high"].iloc[::-1]
-    low_reversed = df["low"].iloc[::-1]
+    n = len(df)
+    high_labels = np.full(n, np.nan)
+    low_labels = np.full(n, np.nan)
 
-    # Rolling window of 5 on reversed series = "next 5" on original
-    rolling_high = high_reversed.rolling(window=LABEL_LOOKAHEAD, min_periods=LABEL_LOOKAHEAD).max()
-    rolling_low = low_reversed.rolling(window=LABEL_LOOKAHEAD, min_periods=LABEL_LOOKAHEAD).min()
+    # For each row, find max high and min low in the NEXT 5 candles
+    for i in range(n - LABEL_LOOKAHEAD):
+        future_slice = df.iloc[i + 1: i + 1 + LABEL_LOOKAHEAD]
+        high_labels[i] = future_slice["high"].max()
+        low_labels[i] = future_slice["low"].min()
 
-    # Reverse back and shift by 1 (we want NEXT 5 candles, not including current)
-    df["range_high_label"] = rolling_high.iloc[::-1].shift(-1).values
-    df["range_low_label"] = rolling_low.iloc[::-1].shift(-1).values
+    df["range_high_label"] = high_labels
+    df["range_low_label"] = low_labels
 
     # Remove rows where we don't have future data
-    df = df.dropna(subset=["range_high_label", "range_low_label"])
-    df = df.iloc[:-LABEL_LOOKAHEAD].copy()
+    df = df.dropna(subset=["range_high_label", "range_low_label"]).reset_index(drop=True)
     return df
 
 

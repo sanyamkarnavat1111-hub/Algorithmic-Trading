@@ -22,10 +22,10 @@
 - Keep incremental sync, pagination, retry logic
 - Verify Binance API supports 15m interval
 
-### Task 3: Run fetcher to populate database ⬜
-- Execute fetcher script
-- Verify data with check_db.py
-- Confirm we have enough rows for training (need 250+ after indicator warmup)
+### Task 3: Run fetcher + train on Render deploy 🟡
+- Bootstrap in main.py handles: drop tables → create fresh → fetch 15m → train models
+- Will execute automatically when code is pushed to Render
+- All progress visible in Render logs
 
 ### Task 4: Update feature pipeline for dual labels ✅
 - Keep all existing indicators (they work on any timeframe)
@@ -57,21 +57,21 @@
 - Save both models to registry
 - Support warm-start for retraining
 
-### Task 7: Train models and review results ⬜
-- Run: python models/direction_trainer.py → review F1 score
-- Run: python models/range_trainer.py → review MAE
-- If unsatisfactory: adjust hyperparameters, retrain
-- Iterate until both models meet targets
-- Checkpoint: STOP HERE, review with user before Phase 2
+### Task 7: Train models and review results 🟡
+- Will run automatically during Render bootstrap
+- Review F1 score in Render logs (target ≥ 47%)
+- Review MAE in Render logs
+- If unsatisfactory: adjust hyperparameters, redeploy
+- Checkpoint: review results before enabling Phase 2 trading
 
 ---
 
 ## Phase 2: Live Bot (Automated)
 
-### Task 8: Build combined predictor ⬜
-- Rewrite models/predictor.py
-- Load both active models (direction + range HIGH + range LOW)
-- Return: {direction, confidence, predicted_high, predicted_low, current_price}
+### Task 8: Build combined predictor ✅
+- models/predictor.py rewritten
+- Loads direction + range_high + range_low models
+- Returns: {direction, confidence, predicted_high, predicted_low, current_price}
 
 ### Task 9: Build portfolio manager ⬜
 - New file: trading/portfolio_manager.py
@@ -92,10 +92,10 @@
 - Exit if current_price ≤ predicted_low (prediction wrong, cut)
 - Log reasoning for each decision
 
-### Task 11: Update scheduler to 15-min heartbeat ⬜
-- Rewrite scheduler/job_runner.py
-- Every 15 min: fetch → predict → decide → check positions
-- Trigger retraining after 100 closed trades
+### Task 11: Update scheduler to 15-min heartbeat ✅
+- scheduler/job_runner.py rewritten
+- Every 15 min: fetch → predict → log
+- Trade execution will be added after Phase 2 tasks
 
 ### Task 12: Update retraining loop for both models ⬜
 - Rewrite learning/retrain_loop.py
@@ -104,30 +104,43 @@
 - Retrain range model (warm-start)
 - Deploy new version only if equal or better score
 
-### Task 13: Update database schema ⬜
-- Remove stop_loss column from trades
-- Add predicted_high, predicted_low to trades
-- Add portfolio state table
-- Add predictions log table (for accuracy tracking)
+### Task 13: Update database schema ✅
+- data/database.py rewritten with new schema
+- trades table: no stop_loss, has predicted_high/low
+- portfolio table: USDT balance + BTC holdings
+- predictions_log table: for accuracy tracking
+- Bootstrap drops old tables and creates fresh on deploy
 
 ### Task 14: Update API + Dashboard ⬜
-- Show predictions (direction + predicted high/low) on dashboard
-- Show portfolio state (USDT + BTC + total value)
-- Show prediction accuracy (predicted vs actual)
-- Remove stop-loss references from UI
+- api/routes.py updated for new model structure
+- Dashboard UI still needs updating (Phase 2)
+- Show predictions (direction + predicted high/low)
+- Show portfolio state
 
 ### Task 15: Clean up old code ⬜
 - Delete trading/risk_manager.py
-- Remove all stop-loss and circuit breaker logic
-- Remove sqlalchemy from requirements.txt
+- Remove old trainer.py (replaced by direction_trainer.py + range_trainer.py)
 - Update README.md with new setup instructions
-- Update .gitignore if needed
+
+---
+
+## Deployment Checklist (Render)
+
+1. Push code to GitHub
+2. Set Render env vars:
+   - `ENVIRONMENT=production`
+   - `RENDER_DB_INTERNAL_URL=postgresql://sanyam:RJrluq6tevyPaUqlFcIsAXpfbRnqJtTO@dpg-d9nhnjrncjis73a7dkeg-a/trading_bot_db_z23m`
+   - (internal URL — no region prefix, uses Render internal network)
+3. Build command: `pip install -r requirements.txt`
+4. Start command: `python api/main.py`
+5. Watch logs for bootstrap progress (fetch + train)
+6. Once bootstrap completes, bot is live with 15-min heartbeat
 
 ---
 
 ## Execution Notes
 
-- Phase 1 is done manually and iteratively (train → review → adjust → retrain)
-- Phase 2 only starts after Phase 1 models are satisfactory
-- Each task will be executed one at a time with user review
-- Code will be clean, readable, well-commented — no vibe coding
+- Phase 1 runs automatically on deploy (fetch data + train)
+- Review training results in Render logs
+- Phase 2 (actual trading) requires Tasks 9, 10, 12 to be implemented
+- Code is clean, readable, well-commented — no vibe coding

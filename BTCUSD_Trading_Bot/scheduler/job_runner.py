@@ -1,12 +1,14 @@
 """
-scheduler/job_runner.py — Heartbeat scheduler for the 1H AI model.
+scheduler/job_runner.py — 15-minute heartbeat scheduler.
 
-Runs every 15 minutes and performs:
-  1. Fetch latest 1H candles from Binance
-  2. Run prediction (BUY/SELL/HOLD)
-  3. Check open trades for stop-loss / exit signals
-  4. Open new trade if signal is confident enough
-  5. Check if model needs retraining
+Every 15 minutes:
+  1. Fetch latest 15-min candle from Binance
+  2. Run both models (Direction + Range)
+  3. Log prediction
+  4. (Phase 2: Execute trade decisions)
+
+For now (Phase 1), it just fetches data and logs predictions.
+Trade execution will be added in Phase 2.
 """
 
 import sys
@@ -18,73 +20,53 @@ from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime
 
 from data.binance_fetcher import fetch_latest
-from models.predictor import predict
-from trading.paper_trader import open_trade, check_and_close_trades
-from learning.retrain_loop import check_and_retrain
 from data.database import log_event
 from config import HEARTBEAT_MINUTES
 
-MODEL_ID  = "ai_1h"
-TIMEFRAME = "1h"
+TIMEFRAME = "15m"
+MODEL_ID = "ai_15m"
 
 
 def heartbeat():
-    """Main 15-minute job for the 1H model."""
-    print(f"\n[Scheduler] Heartbeat started")
+    """Main 15-minute job."""
+    print(f"\n[Scheduler] Heartbeat at {datetime.now().strftime('%H:%M:%S')}", flush=True)
 
     try:
-        # Step 1 — Pull latest 1H candles from Binance
+        # Step 1: Fetch latest candle
         fetch_latest(TIMEFRAME)
 
-        # Step 2 — Get prediction from active model
-        prediction = predict(TIMEFRAME)
-        if prediction is None:
-            print(f"[Scheduler] {MODEL_ID}: No prediction (model not trained yet)")
-            return
-
-        current_price = prediction["current_price"]
-        signal        = prediction["signal"]
-        confidence    = prediction["confidence"]
-        print(f"[Scheduler] {MODEL_ID}: {signal} @ ${current_price:,.2f} (conf={confidence:.1%})")
-
-        # Step 3 — Check and close existing trades
-        check_and_close_trades(MODEL_ID, current_price, exit_signal=signal)
-
-        # Step 4 — Open a new trade if signal is strong enough
-        if prediction["should_trade"]:
-            new_trade = open_trade(prediction)
-            if new_trade:
-                print(f"[Scheduler] {MODEL_ID}: Opened {signal} trade")
-        else:
-            from trading.paper_trader import record_skipped_trade
-            record_skipped_trade(prediction)
-            print(f"[Scheduler] {MODEL_ID}: Recorded SKIPPED trade ({signal})")
+        # Step 2: Run prediction (if models exist)
+        try:
+            from models.predictor import predict
+            prediction = predict(TIMEFRAME)
+            if prediction:
+                print(f"[Scheduler] Prediction: {prediction['direction']} "
+                      f"(conf={prediction['confidence']:.1%}) | "
+                      f"High=${prediction['predicted_high']:,.0f} | "
+                      f"Low=${prediction['predicted_low']:,.0f}", flush=True)
+            else:
+                print("[Scheduler] No prediction (models not ready)", flush=True)
+        except Exception as e:
+            print(f"[Scheduler] Prediction error: {e}", flush=True)
 
     except Exception as e:
         log_event("ERROR", f"Heartbeat error: {str(e)}", model_id=MODEL_ID)
-        print(f"[Scheduler] {MODEL_ID}: Error - {e}")
+        print(f"[Scheduler] Error: {e}", flush=True)
 
-    # Step 5 — Check if retraining is due
-    try:
-        check_and_retrain(TIMEFRAME)
-    except Exception as e:
-        log_event("ERROR", f"Retrain check error: {str(e)}", model_id=MODEL_ID)
-        print(f"[Scheduler] Retrain check error - {e}")
-
-    print(f"[Scheduler] Heartbeat complete\n")
+    print(f"[Scheduler] Heartbeat complete.", flush=True)
 
 
 def start_scheduler():
-    """Start the background scheduler. Called once when FastAPI starts."""
+    """Start the background scheduler. Called once after bootstrap."""
     scheduler = BackgroundScheduler()
     scheduler.add_job(
         heartbeat,
         trigger=IntervalTrigger(minutes=HEARTBEAT_MINUTES),
-        id="heartbeat",
+        id="heartbeat_15m",
         replace_existing=True,
-        max_instances=1,    # never run two heartbeats simultaneously
-        next_run_time=datetime.now() # Trigger the first run immediately on startup
+        max_instances=1,
+        next_run_time=None,  # Don't run immediately (bootstrap just ran)
     )
     scheduler.start()
-    print(f"[Scheduler] Started — running every {HEARTBEAT_MINUTES} minutes")
+    print(f"[Scheduler] Started — running every {HEARTBEAT_MINUTES} minutes", flush=True)
     return scheduler
