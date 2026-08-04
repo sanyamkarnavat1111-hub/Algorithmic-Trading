@@ -93,7 +93,7 @@ def run_fetch_data():
             return
 
         log("Connected to Binance. Fetching 15-min candles (resumes from last saved)...")
-        sync_timeframe("15m")
+        sync_timeframe("15m", progress_callback=log)
 
         # Count total candles
         from data.database import get_connection

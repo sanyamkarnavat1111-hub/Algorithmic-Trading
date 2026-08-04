@@ -116,7 +116,7 @@ def test_binance_connection() -> bool:
         return False
 
 
-def sync_timeframe(timeframe: str):
+def sync_timeframe(timeframe: str, progress_callback=None):
     """
     Incremental sync for a timeframe.
 
@@ -124,7 +124,16 @@ def sync_timeframe(timeframe: str):
     - If DB is empty: fetches full history from Aug 17, 2017
     - Paginates in batches of 1000 until current time
     - Safe to re-run: ON CONFLICT skips duplicates
+
+    Args:
+        timeframe: "15m"
+        progress_callback: optional function(msg) to send live progress updates
     """
+    def _log(msg):
+        print(msg, flush=True)
+        if progress_callback:
+            progress_callback(msg)
+
     interval = TIMEFRAMES[timeframe]["interval"]
 
     # Find the latest candle already in DB
@@ -141,10 +150,10 @@ def sync_timeframe(timeframe: str):
 
     if last_time:
         start_ms = int(last_time.replace(tzinfo=timezone.utc).timestamp() * 1000) + 1
-        print(f"[Binance] Resuming {timeframe} from: {last_time} (UTC)")
+        _log(f"Resuming {timeframe} from: {last_time} (UTC)")
     else:
         start_ms = BINANCE_INCEPTION_MS
-        print(f"[Binance] No data for {timeframe}. Fetching full history from 2017...")
+        _log(f"No existing data. Fetching full history from Aug 2017...")
 
     fetched_total = 0
     now_ms = int(time.time() * 1000)
@@ -160,24 +169,25 @@ def sync_timeframe(timeframe: str):
         fetched_total += len(raw)
 
         last_open_ms = raw[-1][0]
-        print(f"[Binance] {timeframe}: +{len(raw)} candles "
-              f"(total: {fetched_total}) | up to {df['open_time'].iloc[-1]}")
+
+        # Log progress every 5000 candles to avoid flooding
+        if fetched_total % 5000 < 1000:
+            _log(f"Fetched {fetched_total:,} candles so far | up to {df['open_time'].iloc[-1]}")
 
         start_ms = last_open_ms + 1
         if start_ms >= now_ms:
             break
 
-        # Small delay to respect Binance rate limits
         time.sleep(0.3)
 
     log_event("INFO", f"Synced {fetched_total} candles for {timeframe}",
               model_id=f"ai_{timeframe}")
-    print(f"[Binance] Done. {fetched_total} new candles saved for {timeframe}.")
+    _log(f"Done! {fetched_total:,} new candles saved for {timeframe}.")
 
 
 def fetch_latest(timeframe: str):
     """Called by scheduler every 15 minutes to keep data current."""
-    sync_timeframe(timeframe)
+    sync_timeframe(timeframe, progress_callback=None)
 
 
 def load_candles(timeframe: str, limit: int = 1000) -> pd.DataFrame:
