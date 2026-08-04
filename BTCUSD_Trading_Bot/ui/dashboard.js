@@ -6,11 +6,11 @@
  */
 
 const REFRESH_MS  = 30_000;  // refresh every 30 seconds
-const MODELS      = ['ai_1h'];
+const MODELS      = ['ai_15m'];
 
 
 let priceChart       = null;
-let currentTimeframe = '1h';
+let currentTimeframe = '15m';
 let allTrades        = [];   // cached for filtering without re-fetch
 
 // ── Bootstrap ──────────────────────────────────────────────────────────────
@@ -179,7 +179,7 @@ function renderTradesTable(trades) {
       'HOLD': '<span class="badge badge-hold">HOLD</span>',
     }[t.signal] ?? t.signal;
 
-    const modelLabel = { ai_1h: 'AI-1H', ai_8h: 'AI-8H', ai_1d: 'AI-1D' }[t.model_id] ?? t.model_id;
+    const modelLabel = { ai_15m: 'AI-15M', ai_1h: 'AI-1H', ai_8h: 'AI-8H', ai_1d: 'AI-1D' }[t.model_id] ?? t.model_id;
 
     const timeStr = t.opened_at
       ? new Date(t.opened_at).toLocaleString()

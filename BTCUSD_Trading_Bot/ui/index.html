@@ -38,54 +38,54 @@
   <!-- ── Model Cards (3 side by side) ── -->
   <section class="models-grid">
 
-    <!-- AI-1: 1-Hour -->
-    <div class="model-card" id="card-ai_1h">
+    <!-- AI-1: 15-Minute -->
+    <div class="model-card" id="card-ai_15m">
       <div class="card-header">
         <div class="model-title">
           <span class="model-icon">🤖</span>
           <div>
             <div class="model-name">AI Model #1</div>
-            <div class="model-sub">1-Hour Candles</div>
+            <div class="model-sub">15-Minute Candles</div>
           </div>
         </div>
-        <div class="signal-badge" id="signal-ai_1h">—</div>
+        <div class="signal-badge" id="signal-ai_15m">—</div>
       </div>
       <div class="card-stats">
         <div class="stat">
           <div class="stat-label">Confidence</div>
-          <div class="stat-value" id="conf-ai_1h">—</div>
+          <div class="stat-value" id="conf-ai_15m">—</div>
         </div>
         <div class="stat">
           <div class="stat-label">Total P&L</div>
-          <div class="stat-value" id="pnl-ai_1h">—</div>
+          <div class="stat-value" id="pnl-ai_15m">—</div>
         </div>
         <div class="stat">
           <div class="stat-label">Win Rate</div>
-          <div class="stat-value" id="winrate-ai_1h">—</div>
+          <div class="stat-value" id="winrate-ai_15m">—</div>
         </div>
         <div class="stat">
           <div class="stat-label">Model v</div>
-          <div class="stat-value" id="version-ai_1h">—</div>
+          <div class="stat-value" id="version-ai_15m">—</div>
         </div>
       </div>
-      <div class="prob-bars" id="probs-ai_1h">
+      <div class="prob-bars" id="probs-ai_15m">
         <div class="prob-row">
           <span class="prob-label sell">SELL</span>
-          <div class="prob-bar-bg"><div class="prob-bar sell-bar" id="pb-sell-ai_1h"></div></div>
-          <span class="prob-val" id="pv-sell-ai_1h">0%</span>
+          <div class="prob-bar-bg"><div class="prob-bar sell-bar" id="pb-sell-ai_15m"></div></div>
+          <span class="prob-val" id="pv-sell-ai_15m">0%</span>
         </div>
         <div class="prob-row">
           <span class="prob-label hold">HOLD</span>
-          <div class="prob-bar-bg"><div class="prob-bar hold-bar" id="pb-hold-ai_1h"></div></div>
-          <span class="prob-val" id="pv-hold-ai_1h">0%</span>
+          <div class="prob-bar-bg"><div class="prob-bar hold-bar" id="pb-hold-ai_15m"></div></div>
+          <span class="prob-val" id="pv-hold-ai_15m">0%</span>
         </div>
         <div class="prob-row">
           <span class="prob-label buy">BUY</span>
-          <div class="prob-bar-bg"><div class="prob-bar buy-bar" id="pb-buy-ai_1h"></div></div>
-          <span class="prob-val" id="pv-buy-ai_1h">0%</span>
+          <div class="prob-bar-bg"><div class="prob-bar buy-bar" id="pb-buy-ai_15m"></div></div>
+          <span class="prob-val" id="pv-buy-ai_15m">0%</span>
         </div>
       </div>
-      <div class="open-trade-section" id="open-trade-ai_1h"></div>
+      <div class="open-trade-section" id="open-trade-ai_15m"></div>
     </div>
 
   </section>
@@ -95,7 +95,7 @@
     <div class="chart-header">
       <div class="chart-title">BTC/USDT Price Chart</div>
       <div class="chart-controls">
-        <button class="tf-btn active" onclick="switchChart('1h', this)">1H</button>
+        <button class="tf-btn active" onclick="switchChart('15m', this)">15M</button>
       </div>
     </div>
     <div class="chart-wrapper">
@@ -109,7 +109,7 @@
       <div class="trades-title">📋 Recent Trades</div>
       <div class="trades-filter">
         <button class="filter-btn active" onclick="filterTrades('all', this)">All</button>
-        <button class="filter-btn" onclick="filterTrades('ai_1h', this)">AI-1H</button>
+        <button class="filter-btn" onclick="filterTrades('ai_15m', this)">AI-15M</button>
       </div>
     </div>
     <div class="table-wrapper">
