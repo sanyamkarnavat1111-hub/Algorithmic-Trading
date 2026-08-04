@@ -37,6 +37,9 @@ def get_dashboard():
             range_high_info = get_model_info(timeframe, "range_high")
             range_low_info = get_model_info(timeframe, "range_low")
 
+            # Fetch trades and stats for the UI
+            recent_trades, open_trades, stats = _get_trades_and_stats(model_id)
+
             models_data.append({
                 "model_id": model_id,
                 "timeframe": timeframe,
@@ -44,6 +47,9 @@ def get_dashboard():
                 "direction_model": direction_info,
                 "range_high_model": range_high_info,
                 "range_low_model": range_low_info,
+                "recent_trades": recent_trades,
+                "open_trades": open_trades,
+                "stats": stats,
             })
 
         return JSONResponse({
@@ -109,3 +115,46 @@ def _get_latest_btc_price() -> float:
     finally:
         conn.close()
     return float(row[0]) if row else 0.0
+
+def _get_trades_and_stats(model_id: str):
+    """Fetch recent trades and basic PnL stats from the trades table."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            # Get latest 10 trades
+            cur.execute("""
+                SELECT action, amount_usdt, btc_quantity, price, pnl, confidence, created_at
+                FROM trades
+                WHERE model_id = %s
+                ORDER BY created_at DESC LIMIT 10
+            """, (model_id,))
+            
+            recent = []
+            for row in cur.fetchall():
+                recent.append({
+                    "signal": row[0],
+                    "amount": float(row[1]),
+                    "btc_quantity": float(row[2]),
+                    "entry_price": float(row[3]),
+                    "pnl": float(row[4]) if row[4] else 0.0,
+                    "confidence": float(row[5]) if row[5] else None,
+                    "opened_at": row[6].isoformat(),
+                    "status": "CLOSED" if row[0] != "HOLD" else "HOLD"
+                })
+                
+            # Get total PnL
+            cur.execute("""
+                SELECT SUM(pnl) FROM trades WHERE model_id = %s
+            """, (model_id,))
+            pnl_row = cur.fetchone()
+            total_pnl = float(pnl_row[0]) if pnl_row[0] else 0.0
+            
+    finally:
+        conn.close()
+        
+    stats = {"total_pnl": total_pnl}
+    # Currently, portfolio_manager handles buys and sells instantly (spot).
+    # Open trades are not tracked distinctly in a separate table, so we pass empty array.
+    open_trades = [] 
+    
+    return recent, open_trades, stats
