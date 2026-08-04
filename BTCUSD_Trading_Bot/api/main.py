@@ -1,14 +1,12 @@
 """
 api/main.py — FastAPI application entry point.
 
-On startup (before the server accepts requests):
-  1. Drop old tables and create fresh schema
-  2. Fetch 15-min candle data from Binance (full history)
-  3. Train both AI models (Direction + Range)
-  4. Start the 15-min scheduler
-  5. Server goes live
+Startup order (fixes Render port scan timeout):
+  1. Server starts IMMEDIATELY and binds to port (Render sees it's alive)
+  2. Background thread runs: drop tables → fetch data → train models
+  3. Once background setup finishes, scheduler starts
 
-All steps are logged so you can watch progress in Render logs.
+This way Render doesn't timeout waiting for port binding.
 """
 
 import sys
@@ -18,6 +16,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import asyncio
+import threading
 import traceback
 
 from fastapi import FastAPI
@@ -29,20 +28,27 @@ from config import API_HOST, API_PORT
 # Path to the UI folder
 UI_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ui")
 
+# Global state to track bootstrap progress
+bootstrap_status = {"state": "pending", "message": "Waiting to start..."}
 
-# ── Bootstrap: runs BEFORE server accepts traffic ─────────────────────────────
+
+# ── Bootstrap: runs in BACKGROUND THREAD after server is already live ─────────
 
 def bootstrap_system():
     """
-    Full system setup — runs on every deploy.
+    Full system setup — runs in background after server binds to port.
     Drops old tables, creates fresh schema, fetches data, trains models.
     All output goes to Render logs.
     """
+    global bootstrap_status
+
+    bootstrap_status = {"state": "running", "message": "Starting setup..."}
     print("\n" + "=" * 60, flush=True)
-    print("[Bootstrap] Starting full system setup...", flush=True)
+    print("[Bootstrap] Starting full system setup (background thread)...", flush=True)
     print("=" * 60, flush=True)
 
     # Step 1: Drop old tables, create fresh schema
+    bootstrap_status["message"] = "Step 1/4: Creating database tables..."
     print("\n[Step 1/4] Creating fresh database tables...", flush=True)
     try:
         from data.database import get_connection, create_tables
@@ -68,39 +74,47 @@ def bootstrap_system():
         create_tables()
         print("[Step 1/4] ✅ Fresh tables created.", flush=True)
     except Exception as e:
+        bootstrap_status = {"state": "failed", "message": f"DB setup failed: {e}"}
         print(f"[Step 1/4] ❌ Database setup failed: {e}", flush=True)
         traceback.print_exc()
-        return False
+        return
 
     # Step 2: Fetch 15-min candle data from Binance
+    bootstrap_status["message"] = "Step 2/4: Fetching candle data from Binance..."
     print("\n[Step 2/4] Fetching 15-min candle data from Binance...", flush=True)
     print("[Step 2/4] This will take several minutes (fetching from 2017)...", flush=True)
     try:
         from data.binance_fetcher import test_binance_connection, sync_timeframe
 
         if not test_binance_connection():
-            print("[Step 2/4] ❌ Cannot reach Binance API. Aborting.", flush=True)
-            return False
+            bootstrap_status = {"state": "failed", "message": "Cannot reach Binance API"}
+            print("[Step 2/4] ❌ Cannot reach Binance API.", flush=True)
+            return
 
         sync_timeframe("15m")
         print("[Step 2/4] ✅ Data fetch complete.", flush=True)
     except Exception as e:
+        bootstrap_status = {"state": "failed", "message": f"Data fetch failed: {e}"}
         print(f"[Step 2/4] ❌ Data fetch failed: {e}", flush=True)
         traceback.print_exc()
-        return False
+        return
 
     # Step 3: Train Direction Model
+    bootstrap_status["message"] = "Step 3/4: Training Direction Model..."
     print("\n[Step 3/4] Training Direction Model (BUY/SELL/HOLD)...", flush=True)
     try:
         from models.direction_trainer import train as train_direction
         direction_result = train_direction(warm_start=False)
-        print(f"[Step 3/4] ✅ Direction Model trained. F1={direction_result['f1_weighted']:.4f}", flush=True)
+        print(f"[Step 3/4] ✅ Direction Model trained. "
+              f"F1={direction_result['f1_weighted']:.4f}", flush=True)
     except Exception as e:
+        bootstrap_status = {"state": "failed", "message": f"Direction training failed: {e}"}
         print(f"[Step 3/4] ❌ Direction training failed: {e}", flush=True)
         traceback.print_exc()
-        return False
+        return
 
     # Step 4: Train Range Model (HIGH + LOW)
+    bootstrap_status["message"] = "Step 4/4: Training Range Model..."
     print("\n[Step 4/4] Training Range Model (HIGH/LOW prediction)...", flush=True)
     try:
         from models.range_trainer import train as train_range
@@ -109,42 +123,46 @@ def bootstrap_system():
               f"HIGH MAE=${range_result['mae_high']:.2f}, "
               f"LOW MAE=${range_result['mae_low']:.2f}", flush=True)
     except Exception as e:
+        bootstrap_status = {"state": "failed", "message": f"Range training failed: {e}"}
         print(f"[Step 4/4] ❌ Range training failed: {e}", flush=True)
         traceback.print_exc()
-        return False
+        return
 
+    # Step 5: Start scheduler
+    bootstrap_status["message"] = "Starting scheduler..."
+    print("\n[Bootstrap] Starting 15-min scheduler...", flush=True)
+    try:
+        from scheduler.job_runner import start_scheduler
+        start_scheduler()
+        print("[Bootstrap] ✅ Scheduler started.", flush=True)
+    except Exception as e:
+        print(f"[Bootstrap] ⚠️ Scheduler failed to start: {e}", flush=True)
+
+    bootstrap_status = {"state": "complete", "message": "System fully operational."}
     print("\n" + "=" * 60, flush=True)
-    print("[Bootstrap] ✅ ALL DONE. System is ready.", flush=True)
+    print("[Bootstrap] ✅ ALL DONE. Bot is fully operational.", flush=True)
     print("=" * 60 + "\n", flush=True)
-    return True
 
 
 # ── Startup & Shutdown ────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Runs on startup and shutdown."""
-    print("\n[START] Crypto Trading Bot starting up...", flush=True)
+    """
+    Server starts FIRST (binds port immediately).
+    Then bootstrap runs in background thread.
+    """
+    print("\n[START] Server starting — binding port immediately...", flush=True)
 
-    # Run bootstrap in a thread so we don't block the event loop
-    loop = asyncio.get_running_loop()
-    success = await loop.run_in_executor(None, bootstrap_system)
+    # Start bootstrap in a background thread (non-blocking)
+    thread = threading.Thread(target=bootstrap_system, daemon=True)
+    thread.start()
+    print("[START] Bootstrap started in background thread.", flush=True)
+    print("[START] Server is LIVE. Check /health or /bootstrap-status.", flush=True)
 
-    if success:
-        # Start scheduler only after bootstrap succeeds
-        from scheduler.job_runner import start_scheduler
-        scheduler = start_scheduler()
-        print("[OK] Scheduler started (15-min heartbeat)", flush=True)
-    else:
-        scheduler = None
-        print("[WARN] Bootstrap failed. Scheduler not started.", flush=True)
+    yield  # Server is running and accepting requests
 
-    yield  # App is running and accepting requests
-
-    # Shutdown
-    if scheduler:
-        scheduler.shutdown(wait=False)
-    print("[EXIT] Server stopped.", flush=True)
+    print("[EXIT] Server shutting down.", flush=True)
 
 
 # ── FastAPI App ───────────────────────────────────────────────────────────────
@@ -156,12 +174,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Import and register API routes
+from api.routes import router
+app.include_router(router)
+
 # Serve static UI files
 if os.path.exists(UI_DIR):
     app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
+# ── Core Endpoints ────────────────────────────────────────────────────────────
 
 @app.get("/health")
 def health_check():
@@ -169,8 +191,14 @@ def health_check():
     return JSONResponse(content={
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "service": "BTC Trading Bot v2",
+        "bootstrap": bootstrap_status["state"],
     })
+
+
+@app.get("/bootstrap-status")
+def get_bootstrap_status():
+    """Check how far along the bootstrap process is."""
+    return JSONResponse(content=bootstrap_status)
 
 
 @app.get("/")
@@ -179,7 +207,10 @@ def serve_dashboard():
     index_path = os.path.join(UI_DIR, "index.html")
     if os.path.exists(index_path):
         return FileResponse(index_path)
-    return JSONResponse(content={"message": "Dashboard not found. Check ui/index.html"})
+    return JSONResponse(content={
+        "message": "Bot is starting up. Check /bootstrap-status for progress.",
+        "bootstrap": bootstrap_status,
+    })
 
 
 # ── Run directly ──────────────────────────────────────────────────────────────
