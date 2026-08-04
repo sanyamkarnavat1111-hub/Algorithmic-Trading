@@ -16,7 +16,7 @@ import numpy as np
 from data.binance_fetcher import load_candles
 from features.pipeline import build_features, get_feature_columns
 from models.registry import load_active_model
-from config import TIMEFRAMES, MIN_CONFIDENCE
+from config import TIMEFRAMES
 
 # Direction class mapping
 DIRECTION_MAP = {0: "SELL", 1: "HOLD", 2: "BUY"}
@@ -70,15 +70,19 @@ def predict(timeframe: str) -> dict:
     confidence = float(proba[predicted_class])
     direction = DIRECTION_MAP[predicted_class]
 
-    # Range prediction (these predict actual dollar prices)
-    predicted_high = float(high_model.predict(last_row)[0])
-    predicted_low = float(low_model.predict(last_row)[0])
-
     # Current price
     current_price = float(raw_df["close"].iloc[-1])
 
-    # Should we trade? Direction != HOLD and confidence above threshold
-    should_trade = (direction != "HOLD") and (confidence >= MIN_CONFIDENCE)
+    # Range prediction (these predict percentage returns)
+    high_pct = float(high_model.predict(last_row)[0])
+    low_pct = float(low_model.predict(last_row)[0])
+
+    # Convert back to absolute dollar price for decision engine
+    predicted_high = current_price * (1 + high_pct)
+    predicted_low = current_price * (1 + low_pct)
+
+    # Should we trade? Just verify direction != HOLD
+    should_trade = (direction != "HOLD")
 
     return {
         "model_id": model_id,

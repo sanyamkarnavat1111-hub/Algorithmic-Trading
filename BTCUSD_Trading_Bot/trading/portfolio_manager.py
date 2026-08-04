@@ -240,3 +240,29 @@ def record_trade(trade: dict, prediction: dict):
         conn.commit()
     finally:
         conn.close()
+
+def record_hold(prediction: dict, reason: str):
+    """Save a HOLD record to the trades table for history tracking (UI visibility)."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO trades
+                  (model_id, action, amount_usdt, btc_quantity, price,
+                   predicted_high, predicted_low, direction_signal, confidence, pnl)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                MODEL_ID,
+                "HOLD",
+                0,
+                0,
+                prediction["current_price"],
+                prediction.get("predicted_high"),
+                prediction.get("predicted_low"),
+                prediction.get("direction"),
+                prediction.get("confidence"),
+                0,
+            ))
+        conn.commit()
+    finally:
+        conn.close()

@@ -92,12 +92,14 @@ def generate_range_labels(df: pd.DataFrame) -> pd.DataFrame:
     n = len(df)
     high_labels = np.full(n, np.nan)
     low_labels = np.full(n, np.nan)
+    close_prices = df["close"].values
 
-    # For each row, find max high and min low in the NEXT 5 candles
+    # For each row, find max high and min low in the NEXT 5 candles as percentage return
     for i in range(n - LABEL_LOOKAHEAD):
         future_slice = df.iloc[i + 1: i + 1 + LABEL_LOOKAHEAD]
-        high_labels[i] = future_slice["high"].max()
-        low_labels[i] = future_slice["low"].min()
+        curr_close = close_prices[i]
+        high_labels[i] = (future_slice["high"].max() - curr_close) / curr_close
+        low_labels[i] = (future_slice["low"].min() - curr_close) / curr_close
 
     df["range_high_label"] = high_labels
     df["range_low_label"] = low_labels

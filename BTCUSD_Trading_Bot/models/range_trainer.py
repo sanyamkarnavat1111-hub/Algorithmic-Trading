@@ -83,8 +83,8 @@ def train(warm_start: bool = False) -> dict:
     current_close = label_df["close"].values.astype(float)
 
     print(f"[Data] Final dataset: {len(X)} rows × {len(available)} features")
-    print(f"[Labels] High range: ${y_high.min():,.0f} - ${y_high.max():,.0f}")
-    print(f"[Labels] Low range:  ${y_low.min():,.0f} - ${y_low.max():,.0f}")
+    print(f"[Labels] High return range: {y_high.min()*100:+.2f}% to {y_high.max()*100:+.2f}%")
+    print(f"[Labels] Low return range:  {y_low.min()*100:+.2f}% to {y_low.max()*100:+.2f}%")
 
     # ── Step 4: K-Fold Cross Validation ───────────────────────────────────────
     print(f"\n[CV] Running 5-fold time-series cross validation...")
@@ -124,10 +124,10 @@ def train(warm_start: bool = False) -> dict:
         mae_l = mean_absolute_error(yl_vl, l_pred)
         cv_mae_high.append(mae_h)
         cv_mae_low.append(mae_l)
-        print(f"  Fold {fold}: HIGH MAE = ${mae_h:,.2f} | LOW MAE = ${mae_l:,.2f}")
+        print(f"  Fold {fold}: HIGH MAE = {mae_h*100:.3f}% | LOW MAE = {mae_l*100:.3f}%")
 
-    print(f"\n[CV] Mean HIGH MAE: ${np.mean(cv_mae_high):,.2f}")
-    print(f"[CV] Mean LOW MAE:  ${np.mean(cv_mae_low):,.2f}")
+    print(f"\n[CV] Mean HIGH MAE: {np.mean(cv_mae_high)*100:.3f}%")
+    print(f"[CV] Mean LOW MAE:  {np.mean(cv_mae_low)*100:.3f}%")
 
     # ── Step 5: Final train/val/test split (70/15/15) ─────────────────────────
     print(f"\n[Final] Training on 70% / Val 15% / Test 15%...")
@@ -218,31 +218,37 @@ def train(warm_start: bool = False) -> dict:
     rmse_low = np.sqrt(mean_squared_error(yl_test, l_pred))
     r2_low = r2_score(yl_test, l_pred)
 
-    # Percentage error relative to price
-    pct_error_high = (mae_high / np.mean(close_test)) * 100
-    pct_error_low = (mae_low / np.mean(close_test)) * 100
+    # Approximate dollar error relative to average price
+    avg_price = np.mean(close_test)
+    dollar_mae_high = mae_high * avg_price
+    dollar_mae_low = mae_low * avg_price
 
     print(f"\n{'='*60}")
     print(f"[RESULTS] Range Model — Test Set")
     print(f"{'='*60}")
     print(f"\n  HIGH Prediction:")
-    print(f"    MAE   : ${mae_high:,.2f}  ({pct_error_high:.3f}% of avg price)")
-    print(f"    RMSE  : ${rmse_high:,.2f}")
+    print(f"    MAE   : {mae_high*100:.3f}%  (approx ${dollar_mae_high:,.2f})")
+    print(f"    RMSE  : {rmse_high*100:.3f}%")
     print(f"    R²    : {r2_high:.4f}")
     print(f"\n  LOW Prediction:")
-    print(f"    MAE   : ${mae_low:,.2f}  ({pct_error_low:.3f}% of avg price)")
-    print(f"    RMSE  : ${rmse_low:,.2f}")
+    print(f"    MAE   : {mae_low*100:.3f}%  (approx ${dollar_mae_low:,.2f})")
+    print(f"    RMSE  : {rmse_low*100:.3f}%")
     print(f"    R²    : {r2_low:.4f}")
-    print(f"\n  CV Mean HIGH MAE: ${np.mean(cv_mae_high):,.2f}")
-    print(f"  CV Mean LOW MAE:  ${np.mean(cv_mae_low):,.2f}")
+    print(f"\n  CV Mean HIGH MAE: {np.mean(cv_mae_high)*100:.3f}%")
+    print(f"  CV Mean LOW MAE:  {np.mean(cv_mae_low)*100:.3f}%")
 
-    # Sample predictions vs actuals
+    # Sample predictions vs actuals (reconstructed dollar values)
     print(f"\n  Sample predictions (last 5 in test set):")
     print(f"  {'Close':>10} | {'Pred High':>10} | {'Actual High':>11} | {'Pred Low':>10} | {'Actual Low':>10}")
     print(f"  {'-'*60}")
     for i in range(-5, 0):
-        print(f"  ${close_test[i]:>9,.0f} | ${h_pred[i]:>9,.0f} | ${yh_test[i]:>10,.0f} | "
-              f"${l_pred[i]:>9,.0f} | ${yl_test[i]:>9,.0f}")
+        pred_h_usd = close_test[i] * (1 + h_pred[i])
+        actual_h_usd = close_test[i] * (1 + yh_test[i])
+        pred_l_usd = close_test[i] * (1 + l_pred[i])
+        actual_l_usd = close_test[i] * (1 + yl_test[i])
+        
+        print(f"  ${close_test[i]:>9,.0f} | ${pred_h_usd:>9,.0f} | ${actual_h_usd:>10,.0f} | "
+              f"${pred_l_usd:>9,.0f} | ${actual_l_usd:>9,.0f}")
 
     # Feature importance (from HIGH model)
     importance = high_model.feature_importance(importance_type="gain")
@@ -267,14 +273,12 @@ def train(warm_start: bool = False) -> dict:
     return {
         "high_version": v_high,
         "low_version": v_low,
-        "mae_high": round(mae_high, 2),
-        "mae_low": round(mae_low, 2),
-        "rmse_high": round(rmse_high, 2),
-        "rmse_low": round(rmse_low, 2),
+        "mae_high": round(mae_high, 6),
+        "mae_low": round(mae_low, 6),
+        "rmse_high": round(rmse_high, 6),
+        "rmse_low": round(rmse_low, 6),
         "r2_high": round(r2_high, 4),
         "r2_low": round(r2_low, 4),
-        "pct_error_high": round(pct_error_high, 4),
-        "pct_error_low": round(pct_error_low, 4),
         "train_rows": len(X_train),
     }
 

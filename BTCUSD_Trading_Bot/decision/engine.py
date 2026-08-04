@@ -17,10 +17,10 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import random
 from trading.portfolio_manager import (
-    get_portfolio, buy_btc, sell_all_btc, record_trade
+    get_portfolio, buy_btc, sell_all_btc, record_trade, record_hold
 )
 from data.database import log_event
-from config import TRADE_AMOUNT_MIN, TRADE_AMOUNT_MAX, MIN_CONFIDENCE
+from config import TRADE_AMOUNT_MIN, TRADE_AMOUNT_MAX
 
 
 MODEL_ID = "ai_15m"
@@ -98,7 +98,7 @@ def make_decision(prediction: dict) -> dict:
             }
 
     # BUY signal: buy if conditions are met
-    if direction == "BUY" and confidence >= MIN_CONFIDENCE:
+    if direction == "BUY":
         # Check if predicted high is meaningfully above current price
         expected_profit_pct = (predicted_high - current_price) / current_price
 
@@ -118,19 +118,20 @@ def make_decision(prediction: dict) -> dict:
                     "trade": trade,
                 }
         else:
+            reason = (f"Direction=BUY but predicted high ${predicted_high:,.0f} "
+                      f"is only +{expected_profit_pct:.3%} above current ${current_price:,.0f}. "
+                      f"Not worth it.")
+            record_hold(prediction, reason)
             return {
                 "action": "HOLD",
-                "reason": (f"Direction=BUY but predicted high ${predicted_high:,.0f} "
-                           f"is only +{expected_profit_pct:.3%} above current ${current_price:,.0f}. "
-                           f"Not worth it."),
+                "reason": reason,
                 "trade": None,
             }
 
-    # HOLD or low confidence
+    # HOLD or SELL with no BTC
     reason = f"Direction={direction} (conf={confidence:.1%})"
-    if direction == "BUY" and confidence < MIN_CONFIDENCE:
-        reason += f" — below {MIN_CONFIDENCE:.0%} threshold"
     if direction == "SELL" and not has_btc:
         reason += " — but no BTC to sell"
-
+        
+    record_hold(prediction, reason)
     return {"action": "HOLD", "reason": reason, "trade": None}
