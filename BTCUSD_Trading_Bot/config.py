@@ -86,8 +86,7 @@ DIRECTION_LGBM_PARAMS = {
     "verbose": -1,
 }
 
-# Minimum confidence to act on a prediction
-MIN_CONFIDENCE = 0.55
+# No minimum confidence threshold — AI trades on majority vote
 
 # ── Range Model (Regression) ─────────────────────────────────────────────────
 

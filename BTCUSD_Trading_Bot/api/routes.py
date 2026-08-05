@@ -28,6 +28,13 @@ def get_dashboard():
     try:
         btc_price = _get_latest_btc_price()
 
+        # Get portfolio state
+        try:
+            from trading.portfolio_manager import get_portfolio
+            portfolio = get_portfolio()
+        except Exception:
+            portfolio = {"usdt_balance": 0, "btc_quantity": 0, "btc_avg_price": 0}
+
         models_data = []
         for timeframe in TIMEFRAMES.keys():
             model_id = TIMEFRAMES[timeframe]["model_id"]
@@ -55,6 +62,7 @@ def get_dashboard():
         return JSONResponse({
             "models": models_data,
             "btc_price": btc_price,
+            "portfolio": portfolio,
         })
     except Exception as e:
         import traceback
@@ -121,14 +129,15 @@ def _get_trades_and_stats(model_id: str):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            # Get latest 10 trades
+            # Get latest 20 trades (excluding HOLD for cleaner view)
             cur.execute("""
-                SELECT action, amount_usdt, btc_quantity, price, pnl, confidence, created_at
+                SELECT action, amount_usdt, btc_quantity, price, pnl,
+                       confidence, predicted_high, predicted_low, created_at
                 FROM trades
                 WHERE model_id = %s
-                ORDER BY created_at DESC LIMIT 10
+                ORDER BY created_at DESC LIMIT 20
             """, (model_id,))
-            
+
             recent = []
             for row in cur.fetchall():
                 recent.append({
@@ -138,23 +147,23 @@ def _get_trades_and_stats(model_id: str):
                     "entry_price": float(row[3]),
                     "pnl": float(row[4]) if row[4] else 0.0,
                     "confidence": float(row[5]) if row[5] else None,
-                    "opened_at": row[6].isoformat(),
-                    "status": "CLOSED" if row[0] != "HOLD" else "HOLD"
+                    "predicted_high": float(row[6]) if row[6] else None,
+                    "predicted_low": float(row[7]) if row[7] else None,
+                    "opened_at": row[8].isoformat() if row[8] else None,
                 })
-                
-            # Get total PnL
+
+            # Get total P&L (only from BUY/SELL, not HOLD)
             cur.execute("""
-                SELECT SUM(pnl) FROM trades WHERE model_id = %s
+                SELECT COALESCE(SUM(pnl), 0) FROM trades
+                WHERE model_id = %s AND action IN ('SELL', 'EXIT_TARGET', 'EXIT_RANGE')
             """, (model_id,))
             pnl_row = cur.fetchone()
             total_pnl = float(pnl_row[0]) if pnl_row[0] else 0.0
-            
+
     finally:
         conn.close()
-        
+
     stats = {"total_pnl": total_pnl}
-    # Currently, portfolio_manager handles buys and sells instantly (spot).
-    # Open trades are not tracked distinctly in a separate table, so we pass empty array.
-    open_trades = [] 
-    
+    open_trades = []
+
     return recent, open_trades, stats

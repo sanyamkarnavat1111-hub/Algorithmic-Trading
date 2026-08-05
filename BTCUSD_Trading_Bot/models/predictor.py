@@ -81,7 +81,7 @@ def predict(timeframe: str) -> dict:
     predicted_high = current_price * (1 + high_pct)
     predicted_low = current_price * (1 + low_pct)
 
-    # Should we trade? Just verify direction != HOLD
+    # Should we trade? Whatever direction model says (no threshold)
     should_trade = (direction != "HOLD")
 
     return {

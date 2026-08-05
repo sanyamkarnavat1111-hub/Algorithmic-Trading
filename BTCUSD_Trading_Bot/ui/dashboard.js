@@ -1,316 +1,228 @@
 /**
- * dashboard.js — Fetches API data and updates the UI every 30 seconds.
+ * dashboard.js — Dashboard with smart refresh intervals.
  *
- * No frameworks. Plain JavaScript.
- * Easy to read: one function per UI section.
+ * Refresh strategy:
+ *   - BTC price + prediction + portfolio: every 30 seconds
+ *   - Price chart: every 10 minutes (candles only change every 15 min)
+ *   - Chart uses sliding window: drops oldest, appends newest
  */
 
-const REFRESH_MS  = 30_000;  // refresh every 30 seconds
-const MODELS      = ['ai_15m'];
+let priceChart = null;
+let chartCandles = []; // in-memory candle buffer (sliding window)
+const CHART_SIZE = 96; // 96 candles = 24 hours of 15-min data
 
-
-let priceChart       = null;
-let currentTimeframe = '15m';
-let allTrades        = [];   // cached for filtering without re-fetch
-
-// ── Bootstrap ──────────────────────────────────────────────────────────────
+// ── Startup ──────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
-  loadDashboard();
-  loadChart(currentTimeframe);
-  setInterval(loadDashboard, REFRESH_MS);
-  setInterval(() => loadChart(currentTimeframe), REFRESH_MS);
+  // Load everything immediately
+  loadDashboardData();
+  loadChartData();
+
+  // Price, prediction, portfolio — refresh every 30 seconds
+  setInterval(loadDashboardData, 30000);
+
+  // Chart — refresh every 10 minutes (600,000 ms)
+  setInterval(loadChartData, 600000);
 });
 
-// ── Main Data Loader ───────────────────────────────────────────────────────
+// ── Dashboard data (price, prediction, portfolio, trades) ────────────────────
 
-async function loadDashboard() {
+async function loadDashboardData() {
   try {
-    const res  = await fetch('/api/dashboard');
+    const res = await fetch('/api/dashboard');
     const data = await res.json();
+    if (data.error) return;
 
-    updateBtcPrice(data.btc_price);
-    updateLastUpdate();
-
-    data.models.forEach(model => {
-      updateModelCard(model);
-    });
-
-    // Collect all recent trades for the table
-    allTrades = [];
-    data.models.forEach(model => {
-      model.recent_trades.forEach(t => {
-        allTrades.push({ ...t, model_id: model.model_id });
-      });
-      model.open_trades.forEach(t => {
-        allTrades.push({ ...t, model_id: model.model_id, status: 'OPEN' });
-      });
-    });
-
-    renderTradesTable(allTrades);
-
-  } catch (err) {
-    console.error('Dashboard load error:', err);
-  }
-}
-
-// ── BTC Price ──────────────────────────────────────────────────────────────
-
-function updateBtcPrice(price) {
-  const el = document.getElementById('btc-price');
-  if (price && price > 0) {
-    el.textContent = '$' + price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  }
-}
-
-function updateLastUpdate() {
-  document.getElementById('last-update').textContent =
-    new Date().toLocaleTimeString();
-}
-
-// ── Model Card Updates ─────────────────────────────────────────────────────
-
-function updateModelCard(model) {
-  const id = model.model_id;  // e.g., 'ai_1h'
-
-  // Signal badge
-  const signalEl = document.getElementById(`signal-${id}`);
-  const signal   = model.prediction?.signal ?? '—';
-  signalEl.textContent = signal;
-  signalEl.className   = `signal-badge ${signal}`;
-
-  // Confidence
-  const conf = model.prediction?.confidence;
-  document.getElementById(`conf-${id}`).textContent =
-    conf != null ? (conf * 100).toFixed(1) + '%' : '—';
-
-  // P&L
-  const pnlEl = document.getElementById(`pnl-${id}`);
-  const pnl   = model.stats?.total_pnl ?? null;
-  if (pnl != null) {
-    pnlEl.textContent  = (pnl >= 0 ? '+' : '') + pnl.toFixed(0) + ' $';
-    pnlEl.className    = 'stat-value ' + (pnl >= 0 ? 'positive' : 'negative');
-  } else {
-    pnlEl.textContent = '—';
-  }
-
-  // Win rate
-  const wr = model.stats?.win_rate;
-  document.getElementById(`winrate-${id}`).textContent =
-    wr != null ? (wr * 100).toFixed(1) + '%' : '—';
-
-  // Model version
-  document.getElementById(`version-${id}`).textContent =
-    model.version ? `v${model.version}` : 'Untrained';
-
-  // Probability bars
-  const probs = model.prediction?.probabilities;
-  if (probs) {
-    setProbBar(id, 'sell', probs.SELL);
-    setProbBar(id, 'hold', probs.HOLD);
-    setProbBar(id, 'buy',  probs.BUY);
-  }
-
-  // Open trades
-  renderOpenTrade(id, model.open_trades);
-}
-
-function setProbBar(modelId, type, value) {
-  const pct = Math.round((value ?? 0) * 100);
-  document.getElementById(`pb-${type}-${modelId}`).style.width  = pct + '%';
-  document.getElementById(`pv-${type}-${modelId}`).textContent   = pct + '%';
-}
-
-function renderOpenTrade(modelId, openTrades) {
-  const container = document.getElementById(`open-trade-${modelId}`);
-  if (!openTrades || openTrades.length === 0) {
-    container.innerHTML = '';
-    return;
-  }
-
-  const t    = openTrades[0];
-  const cls  = t.signal === 'BUY' ? 'buy-trade' : 'sell-trade';
-  const sign = t.signal === 'BUY' ? '📈' : '📉';
-
-  container.innerHTML = `
-    <div class="open-trade-badge ${cls}">
-      <span>${sign} Open ${t.signal} @ $${parseFloat(t.entry_price).toLocaleString()}</span>
-      <span style="color: var(--text-muted)">SL: $${parseFloat(t.stop_loss).toLocaleString()}</span>
-    </div>
-  `;
-}
-
-// ── Trades Table ───────────────────────────────────────────────────────────
-
-function renderTradesTable(trades) {
-  const tbody = document.getElementById('trades-body');
-
-  if (!trades || trades.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="9" class="empty-row">No trades yet — waiting for models to train and signal...</td></tr>';
-    return;
-  }
-
-  // Sort newest first
-  const sorted = [...trades].sort((a, b) => {
-    const ta = new Date(a.opened_at || 0);
-    const tb = new Date(b.opened_at || 0);
-    return tb - ta;
-  });
-
-  tbody.innerHTML = sorted.map(t => {
-    const pnl    = t.pnl;
-    const pnlPct = t.pnl_pct;
-    const pnlStr = pnl != null
-      ? `<span class="${pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}</span>`
-      : '—';
-    const pnlPctStr = pnlPct != null
-      ? `<span class="${pnlPct >= 0 ? 'pnl-pos' : 'pnl-neg'}">${(pnlPct * 100).toFixed(2)}%</span>`
-      : '—';
-
-    const statusBadge = {
-      'OPEN':        '<span class="badge badge-open">OPEN</span>',
-      'CLOSED':      '<span class="badge badge-closed">CLOSED</span>',
-      'STOPPED_OUT': '<span class="badge badge-stopped">STOPPED</span>',
-    }[t.status] ?? t.status;
-
-    const signalBadge = {
-      'BUY':  '<span class="badge badge-buy">BUY</span>',
-      'SELL': '<span class="badge badge-sell">SELL</span>',
-      'HOLD': '<span class="badge badge-hold">HOLD</span>',
-    }[t.signal] ?? t.signal;
-
-    const modelLabel = { ai_15m: 'AI-15M', ai_1h: 'AI-1H', ai_8h: 'AI-8H', ai_1d: 'AI-1D' }[t.model_id] ?? t.model_id;
-
-    const timeStr = t.opened_at
-      ? new Date(t.opened_at).toLocaleString()
-      : '—';
-
-    return `
-      <tr class="trade-row" data-model="${t.model_id}">
-        <td>${modelLabel}</td>
-        <td>${signalBadge}</td>
-        <td>$${parseFloat(t.entry_price || 0).toLocaleString()}</td>
-        <td>${t.exit_price ? '$' + parseFloat(t.exit_price).toLocaleString() : '—'}</td>
-        <td>${pnlStr}</td>
-        <td>${pnlPctStr}</td>
-        <td>${t.confidence ? (t.confidence * 100).toFixed(1) + '%' : '—'}</td>
-        <td>${statusBadge}</td>
-        <td>${timeStr}</td>
-      </tr>
-    `;
-  }).join('');
-}
-
-// ── Trade Filter Buttons ───────────────────────────────────────────────────
-
-function filterTrades(modelId, btn) {
-  // Update active button
-  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-
-  if (modelId === 'all') {
-    renderTradesTable(allTrades);
-  } else {
-    renderTradesTable(allTrades.filter(t => t.model_id === modelId));
-  }
-}
-
-// ── Chart ──────────────────────────────────────────────────────────────────
-
-async function loadChart(timeframe) {
-  try {
-    const res  = await fetch(`/api/candles/${timeframe}?limit=100`);
-    const data = await res.json();
-
-    if (!data.candles || data.candles.length === 0) {
-      console.log('No candle data for chart yet');
-      return;
+    // BTC Price (top bar)
+    if (data.btc_price > 0) {
+      document.getElementById('btc-price').textContent =
+        '$' + data.btc_price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
     }
 
-    renderCandlestickChart(data.candles);
-  } catch (err) {
-    console.error('Chart load error:', err);
+    // Last update time
+    document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+
+    const model = data.models[0];
+    if (!model) return;
+
+    // Prediction section
+    const pred = model.prediction;
+    if (pred) {
+      const dirEl = document.getElementById('pred-direction');
+      dirEl.textContent = pred.direction;
+      dirEl.className = 'pred-value ' + pred.direction.toLowerCase();
+
+      document.getElementById('pred-confidence').textContent = (pred.confidence * 100).toFixed(1) + '%';
+      document.getElementById('pred-high').textContent = '$' + pred.predicted_high.toLocaleString();
+      document.getElementById('pred-low').textContent = '$' + pred.predicted_low.toLocaleString();
+      document.getElementById('pred-current').textContent = '$' + pred.current_price.toLocaleString();
+    } else {
+      document.getElementById('pred-direction').textContent = 'Models not ready';
+      document.getElementById('pred-confidence').textContent = '—';
+      document.getElementById('pred-high').textContent = '—';
+      document.getElementById('pred-low').textContent = '—';
+      document.getElementById('pred-current').textContent = '—';
+    }
+
+    // Portfolio
+    if (data.portfolio) {
+      document.getElementById('port-usdt').textContent =
+        '$' + parseFloat(data.portfolio.usdt_balance).toLocaleString('en-US', {maximumFractionDigits: 0});
+      document.getElementById('port-btc').textContent =
+        parseFloat(data.portfolio.btc_quantity).toFixed(6) + ' BTC';
+      const avg = parseFloat(data.portfolio.btc_avg_price);
+      document.getElementById('port-avg').textContent = avg > 0 ? '$' + avg.toLocaleString() : '—';
+    }
+
+    // Total P&L
+    const pnl = model.stats?.total_pnl || 0;
+    const pnlEl = document.getElementById('port-pnl');
+    pnlEl.textContent = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
+    pnlEl.style.color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+
+    // Latest action
+    if (model.recent_trades && model.recent_trades.length > 0) {
+      const latest = model.recent_trades[0];
+      const actionEl = document.getElementById('pred-action');
+      actionEl.textContent = latest.signal;
+      actionEl.className = 'pred-value ' + latest.signal.toLowerCase();
+    }
+
+    // Trade history table
+    renderTrades(model.recent_trades || []);
+
+    // Model info
+    renderModelInfo('model-direction-info', model.direction_model, 'F1 Score');
+    renderModelInfo('model-high-info', model.range_high_model, 'MAE');
+    renderModelInfo('model-low-info', model.range_low_model, 'MAE');
+
+  } catch (e) {
+    console.error('Dashboard load error:', e);
   }
 }
 
-function renderCandlestickChart(candles) {
+// ── Chart data (refreshes every 10 min, uses sliding window) ─────────────────
+
+async function loadChartData() {
+  try {
+    const res = await fetch('/api/candles/15m?limit=' + CHART_SIZE);
+    const data = await res.json();
+
+    if (!data.candles || data.candles.length === 0) return;
+
+    // Replace buffer with fresh data from API
+    chartCandles = data.candles;
+
+    renderChart();
+  } catch (e) {
+    console.error('Chart load error:', e);
+  }
+}
+
+function renderChart() {
+  if (chartCandles.length === 0) return;
+
+  const labels = chartCandles.map(c => new Date(c.t));
+  const prices = chartCandles.map(c => c.c);
+
   const ctx = document.getElementById('priceChart').getContext('2d');
 
-  // Format for Chart.js Financial
-  const ohlcData = candles.map(c => ({
-    x: new Date(c.t).getTime(),
-    o: c.o,
-    h: c.h,
-    l: c.l,
-    c: c.c,
-  }));
-
   if (priceChart) {
-    priceChart.data.datasets[0].data = ohlcData;
+    // Update existing chart (no destroy/recreate — smooth)
+    priceChart.data.labels = labels;
+    priceChart.data.datasets[0].data = prices;
     priceChart.update('none');
     return;
   }
 
+  // Create chart first time
   priceChart = new Chart(ctx, {
-    type: 'candlestick',
+    type: 'line',
     data: {
+      labels: labels,
       datasets: [{
-        label:           'BTC/USDT',
-        data:            ohlcData,
-        color: {
-          up:   '#22c55e',
-          down: '#ef4444',
-          unchanged: '#64748b',
-        },
-        borderColor: {
-          up:   '#22c55e',
-          down: '#ef4444',
-          unchanged: '#64748b',
-        },
+        label: 'BTC Close Price',
+        data: prices,
+        borderColor: '#8b5cf6',
+        backgroundColor: 'rgba(139, 92, 246, 0.08)',
+        fill: true,
+        tension: 0.3,
+        pointRadius: 0,
+        borderWidth: 2,
       }]
     },
     options: {
-      responsive:          true,
+      responsive: true,
       maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: ctx => {
-              const d = ctx.raw;
-              return [`O: $${d.o.toLocaleString()}`, `H: $${d.h.toLocaleString()}`,
-                      `L: $${d.l.toLocaleString()}`, `C: $${d.c.toLocaleString()}`];
-            }
-          }
-        }
-      },
+      plugins: { legend: { display: false } },
       scales: {
         x: {
           type: 'time',
-          grid:  { color: '#1c2030' },
-          ticks: { color: '#64748b', maxTicksLimit: 10 },
+          grid: { color: '#1a1d2a' },
+          ticks: { color: '#64748b', maxTicksLimit: 8, font: { size: 10 } },
         },
         y: {
           position: 'right',
-          grid:     { color: '#1c2030' },
-          ticks:    { color: '#64748b', callback: v => '$' + v.toLocaleString() },
+          grid: { color: '#1a1d2a' },
+          ticks: {
+            color: '#64748b',
+            callback: v => '$' + v.toLocaleString(),
+            font: { size: 10 },
+          },
         }
       }
     }
   });
 }
 
-// ── Chart Timeframe Switcher ───────────────────────────────────────────────
+// ── Trade history table ──────────────────────────────────────────────────────
 
-function switchChart(timeframe, btn) {
-  currentTimeframe = timeframe;
-  document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
+function renderTrades(trades) {
+  const tbody = document.getElementById('trades-body');
 
-  // Destroy and reload chart for new timeframe
-  if (priceChart) {
-    priceChart.destroy();
-    priceChart = null;
+  if (!trades || trades.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">No trades yet. Waiting for AI to make decisions...</td></tr>';
+    return;
   }
-  loadChart(timeframe);
+
+  tbody.innerHTML = trades.map(t => {
+    const action = t.signal || '—';
+    const actionClass = action === 'BUY' ? 'action-buy' :
+                        action === 'SELL' ? 'action-sell' : 'action-hold';
+    const price = t.entry_price ? '$' + parseFloat(t.entry_price).toLocaleString() : '—';
+    const amount = t.amount > 0 ? '$' + parseFloat(t.amount).toFixed(0) : '—';
+    const predHigh = t.predicted_high ? '$' + parseFloat(t.predicted_high).toLocaleString() : '—';
+    const predLow = t.predicted_low ? '$' + parseFloat(t.predicted_low).toLocaleString() : '—';
+    const pnl = t.pnl && t.pnl !== 0 ? (t.pnl >= 0 ? '+' : '') + '$' + parseFloat(t.pnl).toFixed(2) : '—';
+    const pnlClass = t.pnl > 0 ? 'pnl-pos' : t.pnl < 0 ? 'pnl-neg' : '';
+    const time = t.opened_at
+      ? new Date(t.opened_at).toLocaleString('en-US', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})
+      : '—';
+
+    return `<tr>
+      <td>${time}</td>
+      <td class="${actionClass}">${action}</td>
+      <td>${price}</td>
+      <td>${amount}</td>
+      <td>${predHigh}</td>
+      <td>${predLow}</td>
+      <td class="${pnlClass}">${pnl}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Model info cards ─────────────────────────────────────────────────────────
+
+function renderModelInfo(elementId, info, metricName) {
+  const el = document.getElementById(elementId);
+  if (!info || !info.version) {
+    el.innerHTML = '<span style="color:var(--red)">NOT TRAINED</span>';
+    return;
+  }
+  el.innerHTML = `
+    <div>Version: <b>v${info.version}</b></div>
+    <div>${metricName}: <b>${info.accuracy || '—'}</b></div>
+    <div>Rows: <b>${info.train_rows ? info.train_rows.toLocaleString() : '—'}</b></div>
+    <div>Trained: <b>${info.trained_at ? new Date(info.trained_at).toLocaleDateString() : '—'}</b></div>
+  `;
 }
