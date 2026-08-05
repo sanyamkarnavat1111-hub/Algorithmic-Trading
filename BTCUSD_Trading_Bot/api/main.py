@@ -251,7 +251,10 @@ def _auto_start_trading():
 
     try:
         from models.registry import get_model_info
-        from data.database import get_connection
+        from data.database import get_connection, create_tables
+
+        # Ensure tables exist and sequences are synced (fixes duplicate key errors)
+        create_tables()
 
         # Check candle data
         conn = get_connection()
