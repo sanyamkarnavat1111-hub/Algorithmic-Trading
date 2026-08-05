@@ -102,12 +102,14 @@ RANGE_LGBM_PARAMS = {
 
 # ── Trading Rules ─────────────────────────────────────────────────────────────
 
-# Amount in USDT to spend per trade (bot picks within this range)
+# Amount in USDT per trade (buy $100-200 of BTC, or sell $100-200 worth of BTC)
 TRADE_AMOUNT_MIN = 100   # minimum $100 per trade
 TRADE_AMOUNT_MAX = 200   # maximum $200 per trade
 
-# Starting balance (effectively unlimited for paper trading)
-STARTING_USDT_BALANCE = 10_000_000
+# Starting portfolio (paper trading)
+STARTING_USDT_BALANCE = 5_000_000   # $5M USDT
+STARTING_BTC_QUANTITY = 50.0        # 50 BTC (so bot can sell from day one)
+STARTING_BTC_AVG_PRICE = 63000.0    # average buy price for P&L tracking
 
 # Multiple positions allowed — no max limit
 MAX_OPEN_POSITIONS = 999

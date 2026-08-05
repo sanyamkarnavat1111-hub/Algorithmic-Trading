@@ -16,23 +16,33 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from data.database import get_connection, log_event
-from config import STARTING_USDT_BALANCE
+from config import STARTING_USDT_BALANCE, STARTING_BTC_QUANTITY, STARTING_BTC_AVG_PRICE
 
 
 MODEL_ID = "ai_15m"
 
 
 def _ensure_portfolio_exists():
-    """Create portfolio row if it doesn't exist yet."""
+    """Create portfolio row if it doesn't exist yet. Starts with both USDT and BTC."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT id FROM portfolio WHERE model_id = %s", (MODEL_ID,))
-            if cur.fetchone() is None:
+            cur.execute("SELECT id, btc_quantity FROM portfolio WHERE model_id = %s", (MODEL_ID,))
+            row = cur.fetchone()
+            if row is None:
+                # First time — create with starting balances
                 cur.execute("""
                     INSERT INTO portfolio (model_id, usdt_balance, btc_quantity, btc_avg_price)
-                    VALUES (%s, %s, 0, 0)
-                """, (MODEL_ID, STARTING_USDT_BALANCE))
+                    VALUES (%s, %s, %s, %s)
+                """, (MODEL_ID, STARTING_USDT_BALANCE, STARTING_BTC_QUANTITY, STARTING_BTC_AVG_PRICE))
+            elif float(row[1]) == 0 and STARTING_BTC_QUANTITY > 0:
+                # Portfolio exists but has 0 BTC — reset to starting values
+                # (handles the case where portfolio was created before we added starting BTC)
+                cur.execute("""
+                    UPDATE portfolio
+                    SET usdt_balance = %s, btc_quantity = %s, btc_avg_price = %s, updated_at = NOW()
+                    WHERE model_id = %s
+                """, (STARTING_USDT_BALANCE, STARTING_BTC_QUANTITY, STARTING_BTC_AVG_PRICE, MODEL_ID))
         conn.commit()
     finally:
         conn.close()
