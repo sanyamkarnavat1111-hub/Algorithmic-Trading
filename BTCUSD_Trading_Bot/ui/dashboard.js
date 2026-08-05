@@ -57,11 +57,14 @@ async function loadDashboardData() {
       document.getElementById('pred-low').textContent = '$' + pred.predicted_low.toLocaleString();
       document.getElementById('pred-current').textContent = '$' + pred.current_price.toLocaleString();
     } else {
-      document.getElementById('pred-direction').textContent = 'Models not ready';
+      document.getElementById('pred-direction').textContent = 'Not ready';
+      document.getElementById('pred-direction').className = 'pred-value';
       document.getElementById('pred-confidence').textContent = '—';
       document.getElementById('pred-high').textContent = '—';
       document.getElementById('pred-low').textContent = '—';
-      document.getElementById('pred-current').textContent = '—';
+      document.getElementById('pred-current').textContent = data.btc_price > 0 ? '$' + data.btc_price.toLocaleString() : '—';
+      document.getElementById('pred-action').textContent = 'Waiting for models';
+      document.getElementById('pred-action').className = 'pred-value';
     }
 
     // Portfolio

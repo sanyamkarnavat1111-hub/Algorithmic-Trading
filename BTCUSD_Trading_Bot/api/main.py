@@ -184,13 +184,15 @@ def run_train_range():
 
 
 def run_start_scheduler():
-    """Start the 15-min trading scheduler."""
+    """Manually start the scheduler (fallback if auto-start didn't trigger)."""
     global status
     try:
-        from scheduler.job_runner import start_scheduler
+        from scheduler.job_runner import start_scheduler, heartbeat
         start_scheduler()
         status["scheduler_running"] = True
-        log("✅ Scheduler started! Bot will trade every 15 minutes.")
+        log("✅ Scheduler started manually.")
+        heartbeat()
+        log("First heartbeat done.")
     except Exception as e:
         log(f"❌ Scheduler failed: {e}")
 
@@ -231,11 +233,73 @@ def run_reset_tables():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("[START] Server binding to port...", flush=True)
-    log("Server started. Visit /admin to control the bot.")
+    log("Server started.")
     threading.Thread(target=self_ping_loop, daemon=True).start()
     log("Self-ping active (keeps Render alive).")
+
+    # Auto-check if models + data exist and start trading
+    threading.Thread(target=_auto_start_trading, daemon=True).start()
+
     yield
     print("[EXIT] Server stopped.", flush=True)
+
+
+def _auto_start_trading():
+    """Check if data + models are ready. If yes, start scheduler + first trade immediately."""
+    import time as _time
+    _time.sleep(5)
+
+    try:
+        from models.registry import get_model_info
+        from data.database import get_connection
+
+        # Check candle data
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM candles WHERE timeframe = '15m'")
+                candle_count = cur.fetchone()[0]
+        finally:
+            conn.close()
+
+        if candle_count < 250:
+            log(f"⚠️ Not enough data ({candle_count} candles, need 250+). Use /admin to fetch data first.")
+            return
+
+        # Check all 3 models
+        direction = get_model_info("15m", "direction")
+        range_high = get_model_info("15m", "range_high")
+        range_low = get_model_info("15m", "range_low")
+
+        missing = []
+        if direction["version"] is None:
+            missing.append("Direction")
+        if range_high["version"] is None:
+            missing.append("Range HIGH")
+        if range_low["version"] is None:
+            missing.append("Range LOW")
+
+        if missing:
+            log(f"⚠️ Models not trained: {', '.join(missing)}. Use /admin to train them.")
+            return
+
+        # Everything ready — start trading
+        log(f"✅ All systems ready. Data: {candle_count:,} candles. Models: all trained.")
+
+        from scheduler.job_runner import start_scheduler, heartbeat
+        start_scheduler()
+        status["scheduler_running"] = True
+        log("Scheduler started (every 15 min).")
+
+        # First trade immediately
+        log("Running first prediction + trade...")
+        heartbeat()
+        log("First heartbeat done. Bot is LIVE! 🚀")
+
+    except Exception as e:
+        log(f"❌ Auto-start error: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -399,11 +463,10 @@ ADMIN_HTML = """<!DOCTYPE html>
 
   <div class="actions">
     <button class="btn btn-gray" onclick="checkLatest()">🔍 Check Latest Candle in DB</button>
-    <button class="btn btn-gray" onclick="checkStatus()">📊 Check Training Status</button>
+    <button class="btn btn-gray" onclick="checkStatus()">📊 Check Training & Trading Status</button>
     <button class="btn btn-blue" onclick="doAction('fetch-data')">📥 Fetch / Resume Data</button>
     <button class="btn btn-purple" onclick="doAction('train-direction')">🧠 Train Direction Model</button>
     <button class="btn btn-cyan" onclick="doAction('train-range')">📈 Train Range Model</button>
-    <button class="btn btn-green" onclick="doAction('start-scheduler')">⏱️ Start Live Trading</button>
     <button class="btn btn-red" onclick="if(confirm('DELETE all data?')) doAction('reset-tables')">🗑️ Reset Everything</button>
   </div>
 
@@ -482,9 +545,12 @@ ADMIN_HTML = """<!DOCTYPE html>
         text += '\\n';
 
         if (data.ready_for_trading) {
-          text += '🟢 READY FOR LIVE TRADING — all models trained.';
+          text += '🟢 READY FOR LIVE TRADING — all models trained.\\n';
+          text += '   Trading starts automatically on server boot.\\n';
+          text += '   Scheduler: ' + (data.scheduler_running ? 'RUNNING ✅' : 'NOT RUNNING (restart server)');
         } else {
-          text += '🔴 NOT READY — train all models first.';
+          text += '🔴 NOT READY — train all models first.\\n';
+          text += '   Once all 3 models are trained, trading starts automatically on next deploy.';
         }
 
         resultEl.textContent = text;
