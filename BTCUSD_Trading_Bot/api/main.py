@@ -419,6 +419,27 @@ def trigger_reset():
     return {"ok": True}
 
 
+@app.post("/api/clear-trades")
+def trigger_clear_trades():
+    """Clear trades, portfolio, and prediction logs only. Keeps candles and models."""
+    try:
+        from data.database import get_connection
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM trades")
+                cur.execute("DELETE FROM portfolio")
+                cur.execute("DELETE FROM predictions_log")
+                cur.execute("DELETE FROM app_logs")
+            conn.commit()
+        finally:
+            conn.close()
+        log("🧹 Cleared trades, portfolio, and logs. Fresh start.")
+        return {"ok": True, "msg": "Trades cleared. Portfolio will reinitialize on next heartbeat."}
+    except Exception as e:
+        return JSONResponse({"ok": False, "msg": str(e)}, status_code=500)
+
+
 # ── Trading Dashboard (/) ─────────────────────────────────────────────────────
 
 @app.get("/")
@@ -468,6 +489,7 @@ ADMIN_HTML = """<!DOCTYPE html>
     <button class="btn btn-purple" onclick="doAction('train-direction')">🧠 Train Direction Model</button>
     <button class="btn btn-cyan" onclick="doAction('train-range')">📈 Train Range Model</button>
     <button class="btn btn-red" onclick="if(confirm('DELETE all data?')) doAction('reset-tables')">🗑️ Reset Everything</button>
+    <button class="btn btn-gray" onclick="doAction('clear-trades')">🧹 Clear Trades Only (keep data + models)</button>
   </div>
 
   <div class="result" id="result">Click a button above to see results here.</div>
