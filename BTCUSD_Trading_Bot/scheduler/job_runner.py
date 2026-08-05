@@ -59,7 +59,10 @@ def heartbeat():
         _check_retrain()
 
     except Exception as e:
-        log_event("ERROR", f"Heartbeat error: {str(e)}", model_id=MODEL_ID)
+        try:
+            log_event("ERROR", f"Heartbeat error: {str(e)}", model_id=MODEL_ID)
+        except Exception:
+            pass  # Don't crash if logging fails
         print(f"[Heartbeat] Error: {e}", flush=True)
         import traceback
         traceback.print_exc()

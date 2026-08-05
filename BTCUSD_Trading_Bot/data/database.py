@@ -95,24 +95,38 @@ def create_tables():
     try:
         with conn.cursor() as cur:
             cur.execute(sql)
+
+            # Fix sequences: reset all SERIAL sequences to max(id) + 1
+            # This prevents "duplicate key" errors after data migration
+            tables_with_serial = ['candles', 'trades', 'portfolio', 'predictions_log', 'app_logs']
+            for table in tables_with_serial:
+                cur.execute(f"""
+                    SELECT setval(pg_get_serial_sequence('{table}', 'id'),
+                                  COALESCE((SELECT MAX(id) FROM {table}), 0) + 1, false)
+                """)
+
         conn.commit()
-        print("[DB] All tables created / verified.")
+        print("[DB] All tables created / verified. Sequences synced.")
     finally:
         conn.close()
 
 
 def log_event(level: str, message: str, model_id: str = None):
-    """Write a log entry to PostgreSQL."""
-    conn = get_connection()
+    """Write a log entry to PostgreSQL. Silently handles errors."""
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO app_logs (level, model_id, message) VALUES (%s, %s, %s)",
-                (level, model_id, message)
-            )
-        conn.commit()
-    finally:
-        conn.close()
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO app_logs (level, model_id, message) VALUES (%s, %s, %s)",
+                    (level, model_id, message)
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        # Don't crash the bot because logging failed
+        print(f"[DB] log_event failed (non-fatal): {e}", flush=True)
 
 
 def clean_old_logs(days_to_keep: int = 7):

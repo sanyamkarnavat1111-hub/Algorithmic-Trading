@@ -83,12 +83,17 @@ def _save_candles(df: pd.DataFrame, timeframe: str):
     try:
         with conn.cursor() as cur:
             for _, row in df.iterrows():
-                cur.execute("""
-                    INSERT INTO candles (timeframe, open_time, open, high, low, close, volume)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (timeframe, open_time) DO NOTHING
-                """, (timeframe, row["open_time"], row["open"],
-                      row["high"], row["low"], row["close"], row["volume"]))
+                try:
+                    cur.execute("""
+                        INSERT INTO candles (timeframe, open_time, open, high, low, close, volume)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (timeframe, open_time) DO NOTHING
+                    """, (timeframe, row["open_time"], row["open"],
+                          row["high"], row["low"], row["close"], row["volume"]))
+                except Exception as e:
+                    # Skip any row that causes a conflict (e.g., stale sequence)
+                    conn.rollback()
+                    continue
         conn.commit()
     finally:
         conn.close()
