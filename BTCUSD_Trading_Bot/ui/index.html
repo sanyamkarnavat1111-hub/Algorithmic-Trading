@@ -23,7 +23,7 @@
     </div>
   </header>
 
-  <!-- AI Prediction Panel -->
+  <!-- AI Prediction -->
   <section class="section">
     <h2 class="section-title">🧠 AI Prediction (Next 75 Minutes)</h2>
     <div class="prediction-grid">
@@ -47,39 +47,41 @@
         <div class="pred-label">Current Price</div>
         <div class="pred-value" id="pred-current">—</div>
       </div>
-      <div class="pred-card">
-        <div class="pred-label">Action Taken</div>
-        <div class="pred-value" id="pred-action">—</div>
-      </div>
     </div>
   </section>
 
-  <!-- Portfolio -->
+  <!-- Open Position -->
   <section class="section">
-    <h2 class="section-title">💰 Portfolio</h2>
-    <div class="portfolio-grid">
-      <div class="port-card">
-        <div class="port-label">USDT Balance</div>
-        <div class="port-value" id="port-usdt">—</div>
+    <h2 class="section-title">📌 Current Position</h2>
+    <div id="open-position">No open position. Waiting for next signal...</div>
+  </section>
+
+  <!-- Stats -->
+  <section class="section">
+    <h2 class="section-title">📊 Performance</h2>
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Total P&L</div>
+        <div class="stat-value" id="stat-pnl">—</div>
       </div>
-      <div class="port-card">
-        <div class="port-label">BTC Held</div>
-        <div class="port-value" id="port-btc">—</div>
+      <div class="stat-card">
+        <div class="stat-label">Total Trades</div>
+        <div class="stat-value" id="stat-total">—</div>
       </div>
-      <div class="port-card">
-        <div class="port-label">Avg Buy Price</div>
-        <div class="port-value" id="port-avg">—</div>
+      <div class="stat-card">
+        <div class="stat-label">Wins</div>
+        <div class="stat-value" id="stat-wins">—</div>
       </div>
-      <div class="port-card">
-        <div class="port-label">Total P&L</div>
-        <div class="port-value" id="port-pnl">—</div>
+      <div class="stat-card">
+        <div class="stat-label">Win Rate</div>
+        <div class="stat-value" id="stat-winrate">—</div>
       </div>
     </div>
   </section>
 
   <!-- Price Chart -->
   <section class="section">
-    <h2 class="section-title">📈 BTC/USDT Price (15-min candles)</h2>
+    <h2 class="section-title">📈 BTC/USDT Price (15-min)</h2>
     <div class="chart-box">
       <canvas id="priceChart"></canvas>
     </div>
@@ -87,22 +89,23 @@
 
   <!-- Trade History -->
   <section class="section">
-    <h2 class="section-title">📋 Trade History</h2>
+    <h2 class="section-title">📋 Closed Trades</h2>
     <div class="table-wrap">
       <table class="trades-table">
         <thead>
           <tr>
-            <th>Time</th>
-            <th>Action</th>
-            <th>Price</th>
+            <th>Opened</th>
+            <th>Closed</th>
+            <th>Direction</th>
+            <th>Entry</th>
+            <th>Exit</th>
             <th>Amount</th>
-            <th>Predicted High</th>
-            <th>Predicted Low</th>
             <th>P&L</th>
+            <th>Reason</th>
           </tr>
         </thead>
         <tbody id="trades-body">
-          <tr><td colspan="7" class="empty">Loading...</td></tr>
+          <tr><td colspan="8" class="empty">No closed trades yet...</td></tr>
         </tbody>
       </table>
     </div>

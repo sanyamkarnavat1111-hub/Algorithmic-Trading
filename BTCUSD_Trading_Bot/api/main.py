@@ -209,8 +209,8 @@ def run_reset_tables():
         try:
             with conn.cursor() as cur:
                 cur.execute("""
-                    DROP TABLE IF EXISTS candles, trades, model_store, scalers,
-                    app_logs, portfolio, predictions_log CASCADE;
+                    DROP TABLE IF EXISTS candles, positions, model_store, scalers,
+                    app_logs, portfolio, predictions_log, trades CASCADE;
                 """)
             conn.commit()
         finally:
@@ -424,21 +424,20 @@ def trigger_reset():
 
 @app.post("/api/clear-trades")
 def trigger_clear_trades():
-    """Clear trades, portfolio, and prediction logs only. Keeps candles and models."""
+    """Clear positions and prediction logs only. Keeps candles and models."""
     try:
         from data.database import get_connection
         conn = get_connection()
         try:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM trades")
-                cur.execute("DELETE FROM portfolio")
+                cur.execute("DELETE FROM positions")
                 cur.execute("DELETE FROM predictions_log")
                 cur.execute("DELETE FROM app_logs")
             conn.commit()
         finally:
             conn.close()
-        log("🧹 Cleared trades, portfolio, and logs. Fresh start.")
-        return {"ok": True, "msg": "Trades cleared. Portfolio will reinitialize on next heartbeat."}
+        log("🧹 Cleared positions and logs. Fresh start.")
+        return {"ok": True, "msg": "Positions cleared. Bot will open new position on next heartbeat."}
     except Exception as e:
         return JSONResponse({"ok": False, "msg": str(e)}, status_code=500)
 

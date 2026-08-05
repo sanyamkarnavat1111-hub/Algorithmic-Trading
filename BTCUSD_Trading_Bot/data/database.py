@@ -3,8 +3,7 @@ data/database.py — PostgreSQL connection and table creation.
 
 Tables:
   - candles: raw 15-min OHLCV data from Binance
-  - trades: all buy/sell actions taken by the bot
-  - portfolio: current USDT and BTC balances
+  - positions: open and closed trading positions (the core of trading logic)
   - predictions_log: what the models predicted (for accuracy tracking)
   - app_logs: application-level logging
 """
@@ -40,30 +39,24 @@ def create_tables():
         UNIQUE (timeframe, open_time)
     );
 
-    -- All buy/sell trades executed by the bot
-    CREATE TABLE IF NOT EXISTS trades (
+    -- Trading positions (open and closed)
+    -- A position has a clear lifecycle: OPEN → CLOSED
+    CREATE TABLE IF NOT EXISTS positions (
         id              SERIAL PRIMARY KEY,
         model_id        VARCHAR(20)   NOT NULL,
-        action          VARCHAR(10)   NOT NULL,
+        direction       VARCHAR(10)   NOT NULL,
+        entry_price     NUMERIC(20,8) NOT NULL,
+        exit_price      NUMERIC(20,8),
         amount_usdt     NUMERIC(20,8) NOT NULL,
         btc_quantity    NUMERIC(20,8) NOT NULL,
-        price           NUMERIC(20,8) NOT NULL,
-        predicted_high  NUMERIC(20,8),
-        predicted_low   NUMERIC(20,8),
-        direction_signal VARCHAR(10),
-        confidence      NUMERIC(5,4),
+        predicted_high  NUMERIC(20,8) NOT NULL,
+        predicted_low   NUMERIC(20,8) NOT NULL,
+        confidence      NUMERIC(5,4)  NOT NULL,
         pnl             NUMERIC(20,8),
-        created_at      TIMESTAMP     DEFAULT NOW()
-    );
-
-    -- Current portfolio state
-    CREATE TABLE IF NOT EXISTS portfolio (
-        id              SERIAL PRIMARY KEY,
-        model_id        VARCHAR(20)   NOT NULL UNIQUE,
-        usdt_balance    NUMERIC(20,8) NOT NULL,
-        btc_quantity    NUMERIC(20,8) NOT NULL DEFAULT 0,
-        btc_avg_price   NUMERIC(20,8) NOT NULL DEFAULT 0,
-        updated_at      TIMESTAMP     DEFAULT NOW()
+        status          VARCHAR(10)   NOT NULL DEFAULT 'OPEN',
+        close_reason    VARCHAR(20),
+        opened_at       TIMESTAMP     DEFAULT NOW(),
+        closed_at       TIMESTAMP
     );
 
     -- Predictions log (for tracking accuracy over time)
@@ -96,14 +89,16 @@ def create_tables():
         with conn.cursor() as cur:
             cur.execute(sql)
 
-            # Fix sequences: reset all SERIAL sequences to max(id) + 1
-            # This prevents "duplicate key" errors after data migration
-            tables_with_serial = ['candles', 'trades', 'portfolio', 'predictions_log', 'app_logs']
+            # Fix sequences after data migration
+            tables_with_serial = ['candles', 'positions', 'predictions_log', 'app_logs']
             for table in tables_with_serial:
-                cur.execute(f"""
-                    SELECT setval(pg_get_serial_sequence('{table}', 'id'),
-                                  COALESCE((SELECT MAX(id) FROM {table}), 0) + 1, false)
-                """)
+                try:
+                    cur.execute(f"""
+                        SELECT setval(pg_get_serial_sequence('{table}', 'id'),
+                                      COALESCE((SELECT MAX(id) FROM {table}), 0) + 1, false)
+                    """)
+                except Exception:
+                    pass  # Table might not exist yet on first run
 
         conn.commit()
         print("[DB] All tables created / verified. Sequences synced.")
@@ -125,7 +120,6 @@ def log_event(level: str, message: str, model_id: str = None):
         finally:
             conn.close()
     except Exception as e:
-        # Don't crash the bot because logging failed
         print(f"[DB] log_event failed (non-fatal): {e}", flush=True)
 
 

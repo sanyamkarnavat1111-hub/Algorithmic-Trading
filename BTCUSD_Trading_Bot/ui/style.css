@@ -76,9 +76,6 @@ body {
 .port-label { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
 .port-value { font-size: 1rem; font-weight: 700; }
 
-/* ── Chart ────────────────────────────────────────────────────────────── */
-.chart-box { height: 300px; position: relative; }
-
 /* ── Trade Table ──────────────────────────────────────────────────────── */
 .table-wrap { overflow-x: auto; }
 .trades-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
@@ -112,3 +109,28 @@ body {
   .header { flex-direction: column; gap: 8px; }
   .section { margin: 12px 12px 0; padding: 14px; }
 }
+
+/* ── Stats Grid ───────────────────────────────────────────────────────── */
+.stats-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px;
+}
+.stat-card {
+  background: var(--surface2); border-radius: 8px; padding: 12px; text-align: center;
+}
+.stat-label { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+.stat-value { font-size: 1.1rem; font-weight: 700; }
+
+/* ── Open Position ────────────────────────────────────────────────────── */
+.position-card {
+  background: var(--surface2); border-radius: 8px; padding: 14px;
+}
+.position-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px;
+}
+.pos-label { display: block; font-size: 0.6rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+.pos-value { display: block; font-size: 0.9rem; font-weight: 700; }
+.pos-value.green { color: var(--green); }
+.pos-value.red { color: var(--red); }
+
+/* ── Chart ────────────────────────────────────────────────────────────── */
+.chart-box { height: 300px; position: relative; }

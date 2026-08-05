@@ -1,31 +1,22 @@
 /**
- * dashboard.js — Dashboard with smart refresh intervals.
+ * dashboard.js — Position-based trading dashboard.
  *
- * Refresh strategy:
- *   - BTC price + prediction + portfolio: every 30 seconds
- *   - Price chart: every 10 minutes (candles only change every 15 min)
- *   - Chart uses sliding window: drops oldest, appends newest
+ * Refresh:
+ *   - Price + prediction + position: every 30 seconds
+ *   - Chart: every 10 minutes
  */
 
 let priceChart = null;
-let chartCandles = []; // in-memory candle buffer (sliding window)
-const CHART_SIZE = 96; // 96 candles = 24 hours of 15-min data
-
-// ── Startup ──────────────────────────────────────────────────────────────────
+const CHART_SIZE = 96;
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Load everything immediately
   loadDashboardData();
   loadChartData();
-
-  // Price, prediction, portfolio — refresh every 30 seconds
   setInterval(loadDashboardData, 30000);
-
-  // Chart — refresh every 10 minutes (600,000 ms)
   setInterval(loadChartData, 600000);
 });
 
-// ── Dashboard data (price, prediction, portfolio, trades) ────────────────────
+// ── Dashboard data ───────────────────────────────────────────────────────────
 
 async function loadDashboardData() {
   try {
@@ -33,66 +24,51 @@ async function loadDashboardData() {
     const data = await res.json();
     if (data.error) return;
 
-    // BTC Price (top bar)
+    // BTC Price
     if (data.btc_price > 0) {
       document.getElementById('btc-price').textContent =
         '$' + data.btc_price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
     }
-
-    // Last update time
     document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
 
     const model = data.models[0];
     if (!model) return;
 
-    // Prediction section
+    // Prediction
     const pred = model.prediction;
     if (pred) {
       const dirEl = document.getElementById('pred-direction');
       dirEl.textContent = pred.direction;
       dirEl.className = 'pred-value ' + pred.direction.toLowerCase();
-
       document.getElementById('pred-confidence').textContent = (pred.confidence * 100).toFixed(1) + '%';
       document.getElementById('pred-high').textContent = '$' + pred.predicted_high.toLocaleString();
       document.getElementById('pred-low').textContent = '$' + pred.predicted_low.toLocaleString();
       document.getElementById('pred-current').textContent = '$' + pred.current_price.toLocaleString();
     } else {
-      document.getElementById('pred-direction').textContent = 'Not ready';
+      document.getElementById('pred-direction').textContent = 'Models not ready';
       document.getElementById('pred-direction').className = 'pred-value';
       document.getElementById('pred-confidence').textContent = '—';
       document.getElementById('pred-high').textContent = '—';
       document.getElementById('pred-low').textContent = '—';
       document.getElementById('pred-current').textContent = data.btc_price > 0 ? '$' + data.btc_price.toLocaleString() : '—';
-      document.getElementById('pred-action').textContent = 'Waiting for models';
-      document.getElementById('pred-action').className = 'pred-value';
     }
 
-    // Portfolio
-    if (data.portfolio) {
-      document.getElementById('port-usdt').textContent =
-        '$' + parseFloat(data.portfolio.usdt_balance).toLocaleString('en-US', {maximumFractionDigits: 0});
-      document.getElementById('port-btc').textContent =
-        parseFloat(data.portfolio.btc_quantity).toFixed(6) + ' BTC';
-      const avg = parseFloat(data.portfolio.btc_avg_price);
-      document.getElementById('port-avg').textContent = avg > 0 ? '$' + avg.toLocaleString() : '—';
-    }
+    // Open position
+    renderOpenPosition(model.open_position, pred?.current_price);
 
-    // Total P&L
-    const pnl = model.stats?.total_pnl || 0;
-    const pnlEl = document.getElementById('port-pnl');
+    // Stats
+    const stats = model.stats || {};
+    const pnlEl = document.getElementById('stat-pnl');
+    const pnl = stats.total_pnl || 0;
     pnlEl.textContent = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
     pnlEl.style.color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    document.getElementById('stat-total').textContent = stats.total_trades || 0;
+    document.getElementById('stat-wins').textContent = stats.wins || 0;
+    document.getElementById('stat-winrate').textContent =
+      stats.total_trades > 0 ? (stats.win_rate * 100).toFixed(1) + '%' : '—';
 
-    // Latest action
-    if (model.recent_trades && model.recent_trades.length > 0) {
-      const latest = model.recent_trades[0];
-      const actionEl = document.getElementById('pred-action');
-      actionEl.textContent = latest.signal;
-      actionEl.className = 'pred-value ' + latest.signal.toLowerCase();
-    }
-
-    // Trade history table
-    renderTrades(model.recent_trades || []);
+    // Trade history
+    renderTrades(model.recent_positions || []);
 
     // Model info
     renderModelInfo('model-direction-info', model.direction_model, 'F1 Score');
@@ -100,121 +76,79 @@ async function loadDashboardData() {
     renderModelInfo('model-low-info', model.range_low_model, 'MAE');
 
   } catch (e) {
-    console.error('Dashboard load error:', e);
+    console.error('Dashboard error:', e);
   }
 }
 
-// ── Chart data (refreshes every 10 min, uses sliding window) ─────────────────
+// ── Open Position ────────────────────────────────────────────────────────────
 
-async function loadChartData() {
-  try {
-    const res = await fetch('/api/candles/15m?limit=' + CHART_SIZE);
-    const data = await res.json();
+function renderOpenPosition(pos, currentPrice) {
+  const el = document.getElementById('open-position');
 
-    if (!data.candles || data.candles.length === 0) return;
-
-    // Replace buffer with fresh data from API
-    chartCandles = data.candles;
-
-    renderChart();
-  } catch (e) {
-    console.error('Chart load error:', e);
-  }
-}
-
-function renderChart() {
-  if (chartCandles.length === 0) return;
-
-  const labels = chartCandles.map(c => new Date(c.t));
-  const prices = chartCandles.map(c => c.c);
-
-  const ctx = document.getElementById('priceChart').getContext('2d');
-
-  if (priceChart) {
-    // Update existing chart (no destroy/recreate — smooth)
-    priceChart.data.labels = labels;
-    priceChart.data.datasets[0].data = prices;
-    priceChart.update('none');
+  if (!pos) {
+    el.innerHTML = '<div style="color:var(--muted)">No open position. Waiting for next signal...</div>';
     return;
   }
 
-  // Create chart first time
-  priceChart = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels: labels,
-      datasets: [{
-        label: 'BTC Close Price',
-        data: prices,
-        borderColor: '#8b5cf6',
-        backgroundColor: 'rgba(139, 92, 246, 0.08)',
-        fill: true,
-        tension: 0.3,
-        pointRadius: 0,
-        borderWidth: 2,
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: {
-          type: 'time',
-          grid: { color: '#1a1d2a' },
-          ticks: { color: '#64748b', maxTicksLimit: 8, font: { size: 10 } },
-        },
-        y: {
-          position: 'right',
-          grid: { color: '#1a1d2a' },
-          ticks: {
-            color: '#64748b',
-            callback: v => '$' + v.toLocaleString(),
-            font: { size: 10 },
-          },
-        }
-      }
-    }
-  });
+  const unrealizedPnl = pos.direction === 'BUY'
+    ? (currentPrice - pos.entry_price) * pos.btc_quantity
+    : (pos.entry_price - currentPrice) * pos.btc_quantity;
+  const pnlColor = unrealizedPnl >= 0 ? 'var(--green)' : 'var(--red)';
+  const pnlSign = unrealizedPnl >= 0 ? '+' : '';
+  const dirClass = pos.direction === 'BUY' ? 'green' : 'red';
+
+  el.innerHTML = `
+    <div class="position-card">
+      <div class="position-grid">
+        <div><span class="pos-label">Direction</span><span class="pos-value ${dirClass}">${pos.direction}</span></div>
+        <div><span class="pos-label">Entry Price</span><span class="pos-value">$${pos.entry_price.toLocaleString()}</span></div>
+        <div><span class="pos-label">Amount</span><span class="pos-value">$${pos.amount_usdt.toFixed(0)}</span></div>
+        <div><span class="pos-label">Target (High)</span><span class="pos-value green">$${pos.predicted_high.toLocaleString()}</span></div>
+        <div><span class="pos-label">Floor (Low)</span><span class="pos-value red">$${pos.predicted_low.toLocaleString()}</span></div>
+        <div><span class="pos-label">Unrealized P&L</span><span class="pos-value" style="color:${pnlColor}">${pnlSign}$${unrealizedPnl.toFixed(2)}</span></div>
+      </div>
+    </div>
+  `;
 }
 
-// ── Trade history table ──────────────────────────────────────────────────────
+// ── Closed trades table ──────────────────────────────────────────────────────
 
 function renderTrades(trades) {
   const tbody = document.getElementById('trades-body');
 
   if (!trades || trades.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty">No trades yet. Waiting for AI to make decisions...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">No closed trades yet. Bot will close positions after 75 min or when targets are hit.</td></tr>';
     return;
   }
 
   tbody.innerHTML = trades.map(t => {
-    const action = t.signal || '—';
-    const actionClass = action === 'BUY' ? 'action-buy' :
-                        action === 'SELL' ? 'action-sell' : 'action-hold';
-    const price = t.entry_price ? '$' + parseFloat(t.entry_price).toLocaleString() : '—';
-    const amount = t.amount > 0 ? '$' + parseFloat(t.amount).toFixed(0) : '—';
-    const predHigh = t.predicted_high ? '$' + parseFloat(t.predicted_high).toLocaleString() : '—';
-    const predLow = t.predicted_low ? '$' + parseFloat(t.predicted_low).toLocaleString() : '—';
-    const pnl = t.pnl && t.pnl !== 0 ? (t.pnl >= 0 ? '+' : '') + '$' + parseFloat(t.pnl).toFixed(2) : '—';
-    const pnlClass = t.pnl > 0 ? 'pnl-pos' : t.pnl < 0 ? 'pnl-neg' : '';
-    const time = t.opened_at
-      ? new Date(t.opened_at).toLocaleString('en-US', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})
-      : '—';
+    const dirClass = t.direction === 'BUY' ? 'action-buy' : 'action-sell';
+    const pnl = t.pnl || 0;
+    const pnlStr = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
+    const pnlClass = pnl > 0 ? 'pnl-pos' : pnl < 0 ? 'pnl-neg' : '';
+    const opened = t.opened_at ? new Date(t.opened_at).toLocaleString('en-US', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '—';
+    const closed = t.closed_at ? new Date(t.closed_at).toLocaleString('en-US', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '—';
+    const reason = {
+      'TARGET_HIT': '🎯 Target',
+      'FLOOR_HIT': '⚠️ Floor',
+      'DIRECTION_REVERSED': '🔄 Reversed',
+      'EXPIRED': '⏰ Expired',
+    }[t.close_reason] || t.close_reason || '—';
 
     return `<tr>
-      <td>${time}</td>
-      <td class="${actionClass}">${action}</td>
-      <td>${price}</td>
-      <td>${amount}</td>
-      <td>${predHigh}</td>
-      <td>${predLow}</td>
-      <td class="${pnlClass}">${pnl}</td>
+      <td>${opened}</td>
+      <td>${closed}</td>
+      <td class="${dirClass}">${t.direction}</td>
+      <td>$${t.entry_price.toLocaleString()}</td>
+      <td>${t.exit_price ? '$' + t.exit_price.toLocaleString() : '—'}</td>
+      <td>$${t.amount_usdt.toFixed(0)}</td>
+      <td class="${pnlClass}">${pnlStr}</td>
+      <td>${reason}</td>
     </tr>`;
   }).join('');
 }
 
-// ── Model info cards ─────────────────────────────────────────────────────────
+// ── Model info ───────────────────────────────────────────────────────────────
 
 function renderModelInfo(elementId, info, metricName) {
   const el = document.getElementById(elementId);
@@ -228,4 +162,61 @@ function renderModelInfo(elementId, info, metricName) {
     <div>Rows: <b>${info.train_rows ? info.train_rows.toLocaleString() : '—'}</b></div>
     <div>Trained: <b>${info.trained_at ? new Date(info.trained_at).toLocaleDateString() : '—'}</b></div>
   `;
+}
+
+// ── Chart ────────────────────────────────────────────────────────────────────
+
+async function loadChartData() {
+  try {
+    const res = await fetch('/api/candles/15m?limit=' + CHART_SIZE);
+    const data = await res.json();
+    if (!data.candles || data.candles.length === 0) return;
+
+    const labels = data.candles.map(c => new Date(c.t));
+    const prices = data.candles.map(c => c.c);
+    const ctx = document.getElementById('priceChart').getContext('2d');
+
+    if (priceChart) {
+      priceChart.data.labels = labels;
+      priceChart.data.datasets[0].data = prices;
+      priceChart.update('none');
+      return;
+    }
+
+    priceChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'BTC Close',
+          data: prices,
+          borderColor: '#8b5cf6',
+          backgroundColor: 'rgba(139, 92, 246, 0.08)',
+          fill: true,
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 2,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: {
+            type: 'time',
+            grid: { color: '#1a1d2a' },
+            ticks: { color: '#64748b', maxTicksLimit: 8, font: { size: 10 } },
+          },
+          y: {
+            position: 'right',
+            grid: { color: '#1a1d2a' },
+            ticks: { color: '#64748b', callback: v => '$' + v.toLocaleString(), font: { size: 10 } },
+          }
+        }
+      }
+    });
+  } catch (e) {
+    console.error('Chart error:', e);
+  }
 }
