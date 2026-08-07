@@ -95,7 +95,7 @@ function renderOpenPositions(positions, currentPrice) {
     const pnlDollar = (currentPrice - pos.entry_price) * pos.btc_quantity;
     const pnlColor = pnlPct >= 0 ? 'var(--green)' : 'var(--red)';
     const pnlSign = pnlPct >= 0 ? '+' : '';
-    const opened = pos.opened_at ? new Date(pos.opened_at).toLocaleString('en-US', {hour:'2-digit', minute:'2-digit'}) : '—';
+    const opened = pos.opened_at ? new Date(pos.opened_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour:'2-digit', minute:'2-digit' }) : '—';
 
     return `
       <div class="position-card" style="margin-bottom:8px">
@@ -123,7 +123,7 @@ function renderActivityLog(logs) {
   }
 
   container.innerHTML = logs.map(log => {
-    const timeStr = log.timestamp ? new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
+    const timeStr = log.timestamp ? new Date(log.timestamp).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute:'2-digit' }) : '';
     
     // Simple coloring for keywords
     let msgHTML = log.message;

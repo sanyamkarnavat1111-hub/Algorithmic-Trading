@@ -76,7 +76,7 @@ def get_candles(timeframe: str, limit: int = 100):
     candles = []
     for _, row in df.iterrows():
         candles.append({
-            "t": row["open_time"].isoformat(),
+            "t": row["open_time"].isoformat() + "Z",
             "o": float(row["open"]),
             "h": float(row["high"]),
             "l": float(row["low"]),
@@ -139,7 +139,7 @@ def _get_open_positions(model_id: str) -> list:
                     "btc_quantity": float(row[3]),
                     "predicted_high": float(row[4]),
                     "predicted_low": float(row[5]),
-                    "opened_at": row[6].isoformat() if row[6] else None
+                    "opened_at": row[6].isoformat() + "Z" if row[6] else None
                 })
             return positions
     finally:
@@ -161,7 +161,7 @@ def _get_activity_log(model_id: str) -> list:
             for row in cur.fetchall():
                 logs.append({
                     "message": row[0],
-                    "timestamp": row[1].isoformat() if row[1] else None
+                    "timestamp": row[1].isoformat() + "Z" if row[1] else None
                 })
             return logs
     finally:
