@@ -37,9 +37,9 @@ def get_dashboard():
             range_high_info = get_model_info(timeframe, "range_high")
             range_low_info = get_model_info(timeframe, "range_low")
 
-            open_position = _get_open_position(model_id)
-            recent_positions = _get_recent_positions(model_id)
-            stats = _get_stats(model_id)
+            open_positions = _get_open_positions(model_id)
+            activity_log = _get_activity_log(model_id)
+            stats = _get_position_stats(model_id)
 
             models_data.append({
                 "model_id": model_id,
@@ -48,8 +48,8 @@ def get_dashboard():
                 "direction_model": direction_info,
                 "range_high_model": range_high_info,
                 "range_low_model": range_low_info,
-                "open_position": open_position,
-                "recent_positions": recent_positions,
+                "open_positions": open_positions,
+                "activity_log": activity_log,
                 "stats": stats,
             })
 
@@ -117,72 +117,58 @@ def _get_latest_btc_price() -> float:
     return float(row[0]) if row else 0.0
 
 
-def _get_open_position(model_id: str) -> list:
-    """Get all currently open positions."""
+def _get_open_positions(model_id: str) -> list:
+    """Fetch currently open positions for this model."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT direction, entry_price, amount_usdt, btc_quantity,
-                       predicted_high, predicted_low, confidence, opened_at
+                SELECT id, entry_price, amount_usdt, btc_quantity, 
+                       predicted_high, predicted_low, opened_at
                 FROM positions
                 WHERE model_id = %s AND status = 'OPEN'
                 ORDER BY opened_at ASC
             """, (model_id,))
-            rows = cur.fetchall()
+            
+            positions = []
+            for row in cur.fetchall():
+                positions.append({
+                    "id": row[0],
+                    "entry_price": float(row[1]),
+                    "amount_usdt": float(row[2]),
+                    "btc_quantity": float(row[3]),
+                    "predicted_high": float(row[4]),
+                    "predicted_low": float(row[5]),
+                    "opened_at": row[6].isoformat() if row[6] else None
+                })
+            return positions
     finally:
         conn.close()
 
-    return [
-        {
-            "direction": r[0],
-            "entry_price": float(r[1]),
-            "amount_usdt": float(r[2]),
-            "btc_quantity": float(r[3]),
-            "predicted_high": float(r[4]),
-            "predicted_low": float(r[5]),
-            "confidence": float(r[6]),
-            "opened_at": r[7].isoformat() if r[7] else None,
-        }
-        for r in rows
-    ]
-
-
-def _get_recent_positions(model_id: str) -> list:
-    """Get last 20 closed positions for trade history."""
+def _get_activity_log(model_id: str) -> list:
+    """Fetch the latest 50 ACTION logs."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT direction, entry_price, exit_price, amount_usdt,
-                       predicted_high, predicted_low, pnl, close_reason,
-                       opened_at, closed_at
-                FROM positions
-                WHERE model_id = %s AND status = 'CLOSED'
-                ORDER BY closed_at DESC LIMIT 20
+                SELECT message, created_at
+                FROM app_logs
+                WHERE model_id = %s AND level = 'ACTION'
+                ORDER BY created_at DESC LIMIT 50
             """, (model_id,))
-            rows = cur.fetchall()
+            
+            logs = []
+            for row in cur.fetchall():
+                logs.append({
+                    "message": row[0],
+                    "timestamp": row[1].isoformat() if row[1] else None
+                })
+            return logs
     finally:
         conn.close()
 
-    return [
-        {
-            "direction": r[0],
-            "entry_price": float(r[1]),
-            "exit_price": float(r[2]) if r[2] else None,
-            "amount_usdt": float(r[3]),
-            "predicted_high": float(r[4]),
-            "predicted_low": float(r[5]),
-            "pnl": float(r[6]) if r[6] else 0,
-            "close_reason": r[7],
-            "opened_at": r[8].isoformat() if r[8] else None,
-            "closed_at": r[9].isoformat() if r[9] else None,
-        }
-        for r in rows
-    ]
 
-
-def _get_stats(model_id: str) -> dict:
+def _get_position_stats(model_id: str) -> dict:
     """Get overall trading stats."""
     conn = get_connection()
     try:

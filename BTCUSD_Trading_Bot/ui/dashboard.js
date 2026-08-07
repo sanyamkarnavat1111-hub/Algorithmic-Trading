@@ -54,7 +54,7 @@ async function loadDashboardData() {
     }
 
     // Open positions (multiple)
-    renderOpenPositions(model.open_position, pred?.current_price);
+    renderOpenPositions(model.open_positions, pred?.current_price);
 
     // Stats
     const stats = model.stats || {};
@@ -67,8 +67,8 @@ async function loadDashboardData() {
     document.getElementById('stat-winrate').textContent =
       stats.total_trades > 0 ? (stats.win_rate * 100).toFixed(1) + '%' : '—';
 
-    // Trade history
-    renderTrades(model.recent_positions || []);
+    // Activity log
+    renderActivityLog(model.activity_log || []);
 
     // Model info
     renderModelInfo('model-direction-info', model.direction_model, 'F1 Score');
@@ -112,40 +112,33 @@ function renderOpenPositions(positions, currentPrice) {
   }).join('');
 }
 
-// ── Closed trades table ──────────────────────────────────────────────────────
+// ── Activity Log ─────────────────────────────────────────────────────────────
 
-function renderTrades(trades) {
-  const tbody = document.getElementById('trades-body');
+function renderActivityLog(logs) {
+  const container = document.getElementById('activity-log');
 
-  if (!trades || trades.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">No closed trades yet. Bot will close positions after 75 min or when targets are hit.</td></tr>';
+  if (!logs || logs.length === 0) {
+    container.innerHTML = '<div class="activity-empty">No recent activity found. Waiting for heartbeat...</div>';
     return;
   }
 
-  tbody.innerHTML = trades.map(t => {
-    const dirClass = t.direction === 'BUY' ? 'action-buy' : 'action-sell';
-    const pnl = t.pnl || 0;
-    const pnlStr = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
-    const pnlClass = pnl > 0 ? 'pnl-pos' : pnl < 0 ? 'pnl-neg' : '';
-    const opened = t.opened_at ? new Date(t.opened_at).toLocaleString('en-US', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '—';
-    const closed = t.closed_at ? new Date(t.closed_at).toLocaleString('en-US', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '—';
-    const reason = {
-      'TARGET_HIT': '🎯 Target',
-      'FLOOR_HIT': '⚠️ Floor',
-      'DIRECTION_REVERSED': '🔄 Reversed',
-      'EXPIRED': '⏰ Expired',
-    }[t.close_reason] || t.close_reason || '—';
+  container.innerHTML = logs.map(log => {
+    const timeStr = log.timestamp ? new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
+    
+    // Simple coloring for keywords
+    let msgHTML = log.message;
+    if (msgHTML.includes('BUY')) msgHTML = msgHTML.replace('BUY', '<span style="color:var(--green);font-weight:bold;">BUY</span>');
+    if (msgHTML.includes('SELL')) msgHTML = msgHTML.replace('SELL', '<span style="color:var(--red);font-weight:bold;">SELL</span>');
+    if (msgHTML.includes('HOLD')) msgHTML = msgHTML.replace('HOLD', '<span style="color:var(--muted);font-weight:bold;">HOLD</span>');
+    if (msgHTML.includes('🎯')) msgHTML = '<span style="color:var(--green)">' + msgHTML + '</span>';
+    if (msgHTML.includes('❌') || msgHTML.includes('⚠️')) msgHTML = '<span style="color:var(--red)">' + msgHTML + '</span>';
 
-    return `<tr>
-      <td>${opened}</td>
-      <td>${closed}</td>
-      <td class="${dirClass}">${t.direction}</td>
-      <td>$${t.entry_price.toLocaleString()}</td>
-      <td>${t.exit_price ? '$' + t.exit_price.toLocaleString() : '—'}</td>
-      <td>$${t.amount_usdt.toFixed(0)}</td>
-      <td class="${pnlClass}">${pnlStr}</td>
-      <td>${reason}</td>
-    </tr>`;
+    return `
+      <div class="activity-item">
+        <div class="activity-time">${timeStr}</div>
+        <div class="activity-msg">${msgHTML}</div>
+      </div>
+    `;
   }).join('');
 }
 

@@ -52,6 +52,7 @@ def heartbeat():
         actions = make_decision(prediction)
         for action in actions:
             print(f"[Heartbeat] {action['reason']}", flush=True)
+            log_event("ACTION", action['reason'], model_id=MODEL_ID)
 
         # Step 4: Log prediction for accuracy tracking
         _log_prediction(prediction)

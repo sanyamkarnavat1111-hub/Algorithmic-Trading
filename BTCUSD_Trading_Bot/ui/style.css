@@ -134,3 +134,20 @@ body {
 
 /* ── Chart ────────────────────────────────────────────────────────────── */
 .chart-box { height: 300px; position: relative; }
+
+/* ── Activity Log ─────────────────────────────────────────────────────── */
+.activity-feed {
+  background: var(--surface2); border-radius: 8px; padding: 12px;
+  max-height: 400px; overflow-y: auto; font-family: monospace; font-size: 0.85rem;
+}
+.activity-item {
+  display: flex; gap: 12px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.activity-item:last-child { border-bottom: none; }
+.activity-time {
+  color: var(--muted); min-width: 60px;
+}
+.activity-msg {
+  color: var(--text); flex: 1;
+}
+.activity-empty { color: var(--muted); padding: 12px; text-align: center; }
