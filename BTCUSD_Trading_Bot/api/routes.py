@@ -117,8 +117,8 @@ def _get_latest_btc_price() -> float:
     return float(row[0]) if row else 0.0
 
 
-def _get_open_position(model_id: str) -> dict:
-    """Get the currently open position (if any)."""
+def _get_open_position(model_id: str) -> list:
+    """Get all currently open positions."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -127,25 +127,25 @@ def _get_open_position(model_id: str) -> dict:
                        predicted_high, predicted_low, confidence, opened_at
                 FROM positions
                 WHERE model_id = %s AND status = 'OPEN'
-                ORDER BY opened_at DESC LIMIT 1
+                ORDER BY opened_at ASC
             """, (model_id,))
-            row = cur.fetchone()
+            rows = cur.fetchall()
     finally:
         conn.close()
 
-    if not row:
-        return None
-
-    return {
-        "direction": row[0],
-        "entry_price": float(row[1]),
-        "amount_usdt": float(row[2]),
-        "btc_quantity": float(row[3]),
-        "predicted_high": float(row[4]),
-        "predicted_low": float(row[5]),
-        "confidence": float(row[6]),
-        "opened_at": row[7].isoformat() if row[7] else None,
-    }
+    return [
+        {
+            "direction": r[0],
+            "entry_price": float(r[1]),
+            "amount_usdt": float(r[2]),
+            "btc_quantity": float(r[3]),
+            "predicted_high": float(r[4]),
+            "predicted_low": float(r[5]),
+            "confidence": float(r[6]),
+            "opened_at": r[7].isoformat() if r[7] else None,
+        }
+        for r in rows
+    ]
 
 
 def _get_recent_positions(model_id: str) -> list:

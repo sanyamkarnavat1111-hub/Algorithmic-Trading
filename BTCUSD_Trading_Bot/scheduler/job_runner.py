@@ -49,8 +49,9 @@ def heartbeat():
 
         # Step 3: Decision engine
         from decision.engine import make_decision
-        decision = make_decision(prediction)
-        print(f"[Heartbeat] Action: {decision['action']} — {decision['reason']}", flush=True)
+        actions = make_decision(prediction)
+        for action in actions:
+            print(f"[Heartbeat] {action['reason']}", flush=True)
 
         # Step 4: Log prediction for accuracy tracking
         _log_prediction(prediction)

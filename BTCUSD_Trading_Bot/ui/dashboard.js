@@ -53,8 +53,8 @@ async function loadDashboardData() {
       document.getElementById('pred-current').textContent = data.btc_price > 0 ? '$' + data.btc_price.toLocaleString() : '—';
     }
 
-    // Open position
-    renderOpenPosition(model.open_position, pred?.current_price);
+    // Open positions (multiple)
+    renderOpenPositions(model.open_position, pred?.current_price);
 
     // Stats
     const stats = model.stats || {};
@@ -80,35 +80,36 @@ async function loadDashboardData() {
   }
 }
 
-// ── Open Position ────────────────────────────────────────────────────────────
+// ── Open Positions (up to 5) ─────────────────────────────────────────────────
 
-function renderOpenPosition(pos, currentPrice) {
+function renderOpenPositions(positions, currentPrice) {
   const el = document.getElementById('open-position');
 
-  if (!pos) {
-    el.innerHTML = '<div style="color:var(--muted)">No open position. Waiting for next signal...</div>';
+  if (!positions || positions.length === 0) {
+    el.innerHTML = '<div style="color:var(--muted)">No open positions. Waiting for BUY signal...</div>';
     return;
   }
 
-  const unrealizedPnl = pos.direction === 'BUY'
-    ? (currentPrice - pos.entry_price) * pos.btc_quantity
-    : (pos.entry_price - currentPrice) * pos.btc_quantity;
-  const pnlColor = unrealizedPnl >= 0 ? 'var(--green)' : 'var(--red)';
-  const pnlSign = unrealizedPnl >= 0 ? '+' : '';
-  const dirClass = pos.direction === 'BUY' ? 'green' : 'red';
+  el.innerHTML = positions.map((pos, i) => {
+    const pnlPct = ((currentPrice - pos.entry_price) / pos.entry_price) * 100;
+    const pnlDollar = (currentPrice - pos.entry_price) * pos.btc_quantity;
+    const pnlColor = pnlPct >= 0 ? 'var(--green)' : 'var(--red)';
+    const pnlSign = pnlPct >= 0 ? '+' : '';
+    const opened = pos.opened_at ? new Date(pos.opened_at).toLocaleString('en-US', {hour:'2-digit', minute:'2-digit'}) : '—';
 
-  el.innerHTML = `
-    <div class="position-card">
-      <div class="position-grid">
-        <div><span class="pos-label">Direction</span><span class="pos-value ${dirClass}">${pos.direction}</span></div>
-        <div><span class="pos-label">Entry Price</span><span class="pos-value">$${pos.entry_price.toLocaleString()}</span></div>
-        <div><span class="pos-label">Amount</span><span class="pos-value">$${pos.amount_usdt.toFixed(0)}</span></div>
-        <div><span class="pos-label">Target (High)</span><span class="pos-value green">$${pos.predicted_high.toLocaleString()}</span></div>
-        <div><span class="pos-label">Floor (Low)</span><span class="pos-value red">$${pos.predicted_low.toLocaleString()}</span></div>
-        <div><span class="pos-label">Unrealized P&L</span><span class="pos-value" style="color:${pnlColor}">${pnlSign}$${unrealizedPnl.toFixed(2)}</span></div>
+    return `
+      <div class="position-card" style="margin-bottom:8px">
+        <div class="position-grid">
+          <div><span class="pos-label">Position #${i+1}</span><span class="pos-value green">BUY</span></div>
+          <div><span class="pos-label">Entry</span><span class="pos-value">$${pos.entry_price.toLocaleString()}</span></div>
+          <div><span class="pos-label">Amount</span><span class="pos-value">$${pos.amount_usdt.toFixed(0)}</span></div>
+          <div><span class="pos-label">Current P&L</span><span class="pos-value" style="color:${pnlColor}">${pnlSign}${pnlPct.toFixed(2)}% (${pnlSign}$${pnlDollar.toFixed(2)})</span></div>
+          <div><span class="pos-label">Target (+10%)</span><span class="pos-value green">$${(pos.entry_price * 1.10).toLocaleString()}</span></div>
+          <div><span class="pos-label">Stop (-5%)</span><span class="pos-value red">$${(pos.entry_price * 0.95).toLocaleString()}</span></div>
+        </div>
       </div>
-    </div>
-  `;
+    `;
+  }).join('');
 }
 
 // ── Closed trades table ──────────────────────────────────────────────────────
